@@ -1,36 +1,49 @@
-mod tvae;
 #[cfg(test)]
 mod tests;
+mod tvae;
 
 use crate::tvae::{ColumnData, TVAE};
+use rand::thread_rng;
 use tch::Tensor;
 
 fn main() {
-    let tensor = Tensor::stack(
-        &[
-            Tensor::stack(&[Tensor::of_slice(&[1, 2]), Tensor::of_slice(&[3, 4])], 0),
-            Tensor::stack(&[Tensor::of_slice(&[5, 6]), Tensor::of_slice(&[7, 8])], 0),
-        ],
-        0,
-    );
-    // let tensor = Tensor::stack(&[Tensor::of_slice(&[1, 2]), Tensor::of_slice(&[3, 4])], 0);
-    println!("{}", &tensor);
-    // println!("{:?}", &tensor.size());
-    println!(
-        "{}",
-        // t[:, 1]
-        tensor
-            .slice_copy(1, Some(1), Some(2), 1)
-            // .flatten(1, 2)
-            .to_string(100)
-            .unwrap()
+    // println!("{}", tch::utils::has_mps());
+
+    // let device =  tch::Device::Mps;
+
+    // let device = if tch::utils::has_mps() {
+    //     tch::Device::Mps
+    // } else {
+    //     println!("No acceleration available");
+    //     tch::Device::Cpu
+    // };
+    let device = tch::Device::Cpu;
+
+    let norm = Tensor::randn(&[5_000], (tch::Kind::Float, tch::Device::Cpu));
+
+    // let a = Tensor::randn()
+
+    let test_data = norm
+        .iter::<f64>()
+        .unwrap()
+        .map(|v| (v.clamp(-3.0, 2.9999) + 3.0) / 6.0 * 10.0)
+        .map(|v| v.floor() as i32)
+        .collect::<Vec<_>>();
 
 
-    );
-    // let t = Tensor::of_slice2(&[&Tensor::of_slice(&[])]);
 
-    println!("------------------------------------");
+    let mut net = TVAE::fit(&[ColumnData::Discrete(test_data.clone())], 300, 1500, device);
+    let generated = net.sample(5_000);
 
-    let mut gan = TVAE::new();
-    gan.fit(&[ColumnData::Discrete(vec![1, 2, 3])], 10, 500);
+    println!("Real dist:");
+    for u in 0..10 {
+        let count = test_data.iter().filter(|v| **v == u).count();
+        println!("{} - {}", u, count);
+    }
+
+    println!("Fake dist:");
+    for u in 0..10 {
+        let count = generated.iter().filter(|v| **v == u).count();
+        println!("{} - {}", u, count);
+    }
 }
