@@ -1,93 +1,10 @@
+mod data_transform;
+pub mod input;
+
+use crate::tvae::data_transform::{ColumnTrainInfo, DataTransformer};
+use crate::tvae::input::ColumnData;
 use tch::nn::{Adam, Module, OptimizerConfig};
 use tch::{nn, Tensor};
-
-pub enum CellData {
-    Discrete(u32),
-    Real(f32),
-}
-
-pub enum ColumnData {
-    Discrete(Vec<i32>),
-    Continuous(Vec<f32>),
-}
-
-impl ColumnData {
-    pub fn discrete_to_tensor(data: &[i32]) -> Tensor {
-        let mut uniques = data.to_vec();
-        uniques.sort_unstable();
-        uniques.dedup();
-
-        let n_rows = data.len() as i64;
-        let n_uniques = uniques.len() as i64;
-
-        let data_tensor = Tensor::of_slice(data);
-        let uniques_tensor = Tensor::of_slice(&uniques);
-
-        let data_x_uniques = data_tensor.broadcast_to(&[n_uniques, n_rows]);
-        let uniques_x_data = uniques_tensor.broadcast_to(&[n_rows, n_uniques]);
-
-        let hot_vectors = data_x_uniques.transpose(0, 1).eq_tensor(&uniques_x_data);
-
-        hot_vectors.totype(tch::Kind::Int8)
-    }
-
-    pub fn to_train_data(&self) -> Tensor {
-        match self {
-            ColumnData::Discrete(d) => Self::discrete_to_tensor(d),
-            ColumnData::Continuous(_) => todo!(),
-        }
-    }
-
-    pub fn info(&self) -> ColumnInfo {
-        match self {
-            ColumnData::Discrete(d) => {
-                let mut uniques = d.to_vec();
-                uniques.sort_unstable();
-                uniques.dedup();
-
-                /*
-
-                     ColumnTransformInfo(
-                column_name=column_name, column_type='discrete', transform=ohe,
-                output_info=[SpanInfo(num_categories, 'softmax')],
-                output_dimensions=num_categories)
-                     */
-
-                ColumnInfo {
-                    spans: vec![SpanInfo {
-                        dim: uniques.len(),
-                        func: "softmax",
-                    }],
-                    output_dims: uniques.len() as i64,
-                }
-            }
-            ColumnData::Continuous(_) => {
-                todo!()
-            }
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            ColumnData::Discrete(data) => data.len(),
-            ColumnData::Continuous(data) => data.len(),
-        }
-    }
-}
-
-pub struct Row {
-    columns: Vec<CellData>,
-}
-
-pub struct SpanInfo {
-    dim: usize,
-    func: &'static str,
-}
-
-pub struct ColumnInfo {
-    spans: Vec<SpanInfo>,
-    output_dims: i64,
-}
 
 struct Encoder {
     seq: nn::Sequential,
@@ -170,25 +87,23 @@ impl Decoder {
     }
 }
 
-// NOTE: python x[:, 3] = rust x.slice(0, 0, len(x)).slice(1, 3, 4)
-
 fn calc_loss(
     recon_x: &Tensor,
     x: &Tensor,
     sigmas: &Tensor,
     mu: &Tensor,
     log_var: &Tensor,
-    output_info: &[ColumnInfo],
+    output_info: &[ColumnTrainInfo],
     factor: f32,
 ) -> (Tensor, Tensor) {
     let mut st = 0_i64;
     let mut loss = vec![];
 
     for column_info in output_info {
-        for span_info in &column_info.spans {
+        for span_info in column_info.output_spans() {
             let ed = st + span_info.dim as i64;
 
-            if span_info.func != "softmax" {
+            if span_info.activation != "softmax" {
                 let x_slice = x.slice(1, Some(st), Some(st + 1), 1);
                 let recon_x_slice = recon_x.slice(1, Some(st), Some(st + 1), 1);
 
@@ -228,14 +143,15 @@ fn calc_loss(
 }
 
 pub struct TVAE {
-    encoder: Encoder,
+    device: tch::Device,
     decoder: Decoder,
     batch_size: usize,
     embedding_dim: i64,
-    device: tch::Device,
+    transformer: DataTransformer,
 }
 
-fn next_multiple_of(n: i64, multiple: i64) -> i64 {
+fn next_multiple_of(n: usize, multiple: usize) -> usize {
+    assert!(multiple > 0);
     ((n + multiple - 1) / multiple) * multiple
 }
 
@@ -250,28 +166,38 @@ impl TVAE {
         let compress_dims = [128, 128];
         let decompress_dims = [128, 128];
 
-        let column_infos: Vec<_> = data.iter().map(|column| column.info()).collect();
+        let transformer = DataTransformer::prepare(data);
+        let n_rows = transformer.n_rows() as i64;
 
-        let train_column_data: Vec<_> = data.iter().map(|column| column.to_train_data()).collect();
-        let train_data = Tensor::cat(&train_column_data, 1).totype(tch::Kind::Float);
+        let train_data = Tensor::cat(
+            &data
+                .iter()
+                .enumerate()
+                .map(|(i, v)| transformer.transform(i, v))
+                .collect::<Vec<_>>(),
+            1,
+        )
+        .totype(tch::Kind::Float);
 
-        let data_dim = column_infos.iter().map(|v| v.output_dims).sum::<i64>();
+        let data_dim = transformer
+            .train_infos()
+            .iter()
+            .map(|v| v.total_dim())
+            .sum::<i64>();
 
         let encoder = Encoder::new(&vs.root(), data_dim, &compress_dims, embedding_dim);
         let decoder = Decoder::new(&vs.root(), embedding_dim, &decompress_dims, data_dim);
 
         let mut optimizer = Adam::default().wd(l2scale).build(&vs, 1e-3).unwrap();
 
-        let n_rows = train_data.size()[0];
-        // let n_rows_aligned = next_multiple_of(n_rows, batch_size as i64);
-
         for i in 0..epochs {
-            print!("Epoch #{}... ", i);
+            print!("Epoch #{}... ", i + 1);
 
             let shuffle_perm = Tensor::randperm(n_rows, (tch::Kind::Int64, device));
             let curr_train_data = train_data.index(&[Some(shuffle_perm)]);
 
             let mut total_loss = 0.0;
+            let mut loss_count = 0.0;
 
             for batch_start in (0..n_rows).step_by(batch_size) {
                 optimizer.zero_grad();
@@ -296,38 +222,38 @@ impl TVAE {
                     &sigmas,
                     &mu,
                     &log_var,
-                    &column_infos,
+                    transformer.train_infos(),
                     loss_factor,
                 );
-                let loss = loss1 + loss2;
+                let loss = &loss1 + &loss2;
 
                 total_loss += loss.double_value(&[]);
+                loss_count += 1.0;
 
                 optimizer.backward_step(&loss);
 
                 let _ = decoder.sigma.data().clamp_(0.01, 1.0);
             }
 
-            println!("loss: {}", total_loss);
+            println!("loss: {}", total_loss / loss_count);
         }
 
         Self {
-            encoder,
             decoder,
             batch_size,
             embedding_dim,
             device,
+            transformer,
         }
     }
 
-    // pub fn sample(&self, n_batches: usize) -> Vec<Row> {
-    pub fn sample(&self, samples: usize) -> Vec<i32> {
-        let steps = samples / self.batch_size + 1;
-        let mut rows = Vec::<Row>::with_capacity(steps * self.batch_size);
-        let mut raw_data = Vec::with_capacity(rows.len());
-        let mut sigmas = Tensor::new();
+    pub fn sample(&self, samples: usize) -> Vec<ColumnData> {
+        let n_steps = next_multiple_of(samples, self.batch_size) / self.batch_size;
+        let n_columns = self.transformer.train_infos().len();
+        let mut generated_columns = Vec::<ColumnData>::with_capacity(n_columns);
+        let mut raw_data = Vec::with_capacity(n_steps * self.batch_size);
 
-        for _ in 0..steps {
+        for _ in 0..n_steps {
             let mut noise = Tensor::zeros(
                 &[self.batch_size as i64, self.embedding_dim],
                 (tch::Kind::Float, self.device),
@@ -338,24 +264,28 @@ impl TVAE {
             let fake = fake.tanh();
 
             raw_data.push(fake.detach().to(tch::Device::Cpu));
-            sigmas = _sigmas;
         }
 
-        let data = Tensor::cat(&raw_data, 0);
+        let generated = Tensor::cat(&raw_data, 0);
 
-        let indices = data.argmax(Some(1), false);
+        let mut start_idx = 0;
 
-        // TODO: map indices to unique items
+        for (i, train_info) in self.transformer.train_infos().iter().enumerate() {
+            let end_idx = start_idx + train_info.total_dim();
+            let generated_column = generated.slice(0, None, Some(samples as i64), 1).slice(
+                1,
+                Some(start_idx),
+                Some(end_idx),
+                1,
+            );
 
-        // println!("{}", indices);
+            let inverse_data = self.transformer.inverse_transform(i, &generated_column);
 
-        indices
-            .iter::<i64>()
-            .unwrap()
-            .map(|v| v as i32)
-            .take(samples)
-            .collect()
+            generated_columns.push(inverse_data);
 
-        // rows
+            start_idx = end_idx;
+        }
+
+        generated_columns
     }
 }

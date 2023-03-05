@@ -6,5 +6,4 @@ edition = "2021"
 [dependencies]
 tch = { version = "0.10", default-features = false }
 rand = "0.8"
-#tensorflow = { version = "0.20", default-features = false, features = ["tensorflow_runtime_linking"] }
-
+rand_distr = "0.4"
