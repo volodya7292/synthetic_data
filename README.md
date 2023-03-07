@@ -1,11 +1,12 @@
-# syntheric_data
+# synthetic_data
 
 ## Prerequisites
 
-### MacOS
-```shell
-$ conda env create -f environment.yml 
-$ conda activate synthetic-data 
-$ ln -sf /Users/admin/miniconda/envs/synthetic-data/lib/python3.10/site-packages/torch torch 
-```
+### Windows/Linux
+1. Download PyTorch: [https://pytorch.org/get-started/locally](https://pytorch.org/get-started/locally)
 
+### macOS (Arm)
+
+1. Download PyTorch using pip/conda: [https://pytorch.org/get-started/locally](https://pytorch.org/get-started/locally)
+ 
+Set `LIBTORCH` environment variable to the pytorch folder.

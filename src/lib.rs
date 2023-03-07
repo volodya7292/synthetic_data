@@ -6,7 +6,8 @@ use crate::tvae::input::ColumnData;
 use crate::tvae::TVAE;
 use tch::Tensor;
 
-fn main() {
+#[no_mangle]
+pub unsafe extern "C" fn main2() {
     let device = tch::Device::Cpu;
     let test_data_continuous = {
         let mut norm = Tensor::zeros(&[5_000], (tch::Kind::Float, tch::Device::Cpu));

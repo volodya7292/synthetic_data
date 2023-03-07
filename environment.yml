@@ -1,9 +1,0 @@
-name: synthetic-data
-channels:
-  - pytorch
-  - conda-forge
-dependencies:
-  - python=3.10
-  - pytorch=1
-  - torchvision
-  - torchaudio
