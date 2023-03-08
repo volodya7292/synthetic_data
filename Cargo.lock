@@ -163,6 +163,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "free-ranges"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e54d49b03ed4ec4a98c72fb4ecdcce39526226eb1a6515eed16aeba079348c02"
+
+[[package]]
 name = "generic-array"
 version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -196,6 +202,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest",
+]
+
+[[package]]
+name = "index-pool"
+version = "1.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488275c105c1582919f14b46585694dd7f3ce1e582a4eb078d5fd578ca332593"
+dependencies = [
+ "free-ranges",
 ]
 
 [[package]]
@@ -439,6 +454,8 @@ dependencies = [
 name = "synthetic_data"
 version = "0.1.0"
 dependencies = [
+ "index-pool",
+ "lazy_static",
  "rand",
  "rand_distr",
  "tch",

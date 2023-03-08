@@ -10,6 +10,8 @@ crate-type = ["cdylib"]
 tch = { version = "0.10", default-features = false }
 rand = "0.8"
 rand_distr = "0.4"
+lazy_static = "1.4"
+index-pool = "1.0"
 
 [profile.release]
 rpath = true

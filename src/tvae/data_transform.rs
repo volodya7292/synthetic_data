@@ -1,4 +1,4 @@
-use crate::tvae::input::ColumnData;
+use crate::tvae::input::{ColumnData, ColumnDataRef};
 use tch::Tensor;
 
 pub struct SpanInfo {
@@ -32,7 +32,7 @@ pub struct DataTransformer {
 }
 
 impl DataTransformer {
-    pub fn prepare(columns: &[ColumnData]) -> Self {
+    pub fn prepare(columns: &[ColumnDataRef]) -> Self {
         if columns.is_empty() {
             return Self {
                 fit_infos: vec![],
@@ -49,8 +49,8 @@ impl DataTransformer {
         let columns: Vec<_> = columns
             .iter()
             .map(|column| match column {
-                ColumnData::Discrete(data) => {
-                    let mut uniques = data.clone();
+                ColumnDataRef::Discrete(data) => {
+                    let mut uniques = data.to_vec();
                     uniques.sort_unstable();
                     uniques.dedup();
 
@@ -58,7 +58,7 @@ impl DataTransformer {
                         unique_categories: uniques,
                     }
                 }
-                ColumnData::Continuous(data) => {
+                ColumnDataRef::Continuous(data) => {
                     let filtered: Vec<_> = data.iter().cloned().filter(|v| v.is_finite()).collect();
 
                     let min = filtered
@@ -104,13 +104,13 @@ impl DataTransformer {
         }
     }
 
-    pub fn transform(&self, column_index: usize, data: &ColumnData) -> Tensor {
+    pub fn transform(&self, column_index: usize, data: &ColumnDataRef) -> Tensor {
         let column_info = &self.fit_infos[column_index];
         let n_rows = self.n_rows as i64;
 
         match (data, column_info) {
             (
-                ColumnData::Discrete(data),
+                ColumnDataRef::Discrete(data),
                 ColumnInfo::Discrete {
                     unique_categories, ..
                 },
@@ -128,7 +128,7 @@ impl DataTransformer {
 
                 transformed
             }
-            (ColumnData::Continuous(data), ColumnInfo::Continuous { min, max, .. }) => {
+            (ColumnDataRef::Continuous(data), ColumnInfo::Continuous { min, max, .. }) => {
                 let range = max - min;
                 let filtered = Tensor::of_slice(data);
                 let normalized = (filtered - *min as f64) / range as f64;
@@ -161,7 +161,8 @@ impl DataTransformer {
                 let mut out_data = Vec::with_capacity(n_rows as usize);
 
                 let range = max - min;
-                let tensor_inverse = data * range as f64 + *min as f64;
+                let clamped = data.clamp(0.0, 1.0);
+                let tensor_inverse = clamped * range as f64 + *min as f64;
 
                 for i in 0..n_rows {
                     let value = tensor_inverse.double_value(&[i]) as f32;

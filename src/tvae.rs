@@ -2,7 +2,7 @@ mod data_transform;
 pub mod input;
 
 use crate::tvae::data_transform::{ColumnTrainInfo, DataTransformer};
-use crate::tvae::input::ColumnData;
+use crate::tvae::input::{ColumnData, ColumnDataRef};
 use tch::nn::{Adam, Module, OptimizerConfig};
 use tch::{nn, Tensor};
 
@@ -155,8 +155,16 @@ fn next_multiple_of(n: usize, multiple: usize) -> usize {
     ((n + multiple - 1) / multiple) * multiple
 }
 
+pub type DoStop = bool;
+
 impl TVAE {
-    pub fn fit(data: &[ColumnData], epochs: usize, batch_size: usize, device: tch::Device) -> Self {
+    /// `flow_control`: Fn(epoch, loss) -> DoStop
+    pub fn fit<F: Fn(usize, f64) -> DoStop>(
+        data: &[ColumnDataRef],
+        batch_size: usize,
+        device: tch::Device,
+        flow_control: F,
+    ) -> Self {
         let vs = nn::VarStore::new(device);
         assert!(data.len() > 0);
 
@@ -189,10 +197,9 @@ impl TVAE {
         let decoder = Decoder::new(&vs.root(), embedding_dim, &decompress_dims, data_dim);
 
         let mut optimizer = Adam::default().wd(l2scale).build(&vs, 1e-3).unwrap();
+        let mut epoch = 0;
 
-        for i in 0..epochs {
-            print!("Epoch #{}... ", i + 1);
-
+        loop {
             let shuffle_perm = Tensor::randperm(n_rows, (tch::Kind::Int64, device));
             let curr_train_data = train_data.index(&[Some(shuffle_perm)]);
 
@@ -235,7 +242,12 @@ impl TVAE {
                 let _ = decoder.sigma.data().clamp_(0.01, 1.0);
             }
 
-            println!("loss: {}", total_loss / loss_count);
+            let loss = total_loss / loss_count;
+
+            if flow_control(epoch, loss) {
+                break;
+            }
+            epoch += 1;
         }
 
         Self {
@@ -245,6 +257,10 @@ impl TVAE {
             device,
             transformer,
         }
+    }
+
+    pub fn n_columns(&self) -> usize {
+        self.transformer.train_infos().len()
     }
 
     pub fn sample(&self, samples: usize) -> Vec<ColumnData> {

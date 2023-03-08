@@ -2,135 +2,130 @@
 mod tests;
 mod tvae;
 
-use crate::tvae::input::ColumnData;
+use crate::tvae::input::{ColumnData, ColumnDataRef};
 use crate::tvae::TVAE;
-use tch::Tensor;
+use index_pool::IndexPool;
+use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::slice;
+use std::sync::{Arc, Mutex};
 
+#[derive(Debug)]
+#[repr(u32)]
+pub enum RawColumnType {
+    Continuous = 0,
+    Discrete = 1,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct RawColumnData {
+    r#type: RawColumnType,
+    /// # Pointer type:
+    /// `Continuous`: `*const f32`,
+    /// `Category`: `*const i32`,
+    data: *const c_void,
+}
+
+/// Returns whether to stop the learning loop.
+pub type FlowControlCallback = extern "C" fn(epoch: usize, loss: f64) -> bool;
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct TrainParams {
+    batch_size: usize,
+    flow_control_callback: FlowControlCallback,
+}
+
+pub type SynthNetHandle = usize;
+
+lazy_static! {
+    static ref NET_HANDLES: Mutex<IndexPool> = Default::default();
+    static ref NET_STORAGE: Mutex<HashMap<SynthNetHandle, Arc<Mutex<TVAE>>>> = Default::default();
+}
+
+/// Creates and trains a new NN.
 #[no_mangle]
-pub unsafe extern "C" fn main2() {
-    let device = tch::Device::Cpu;
-    let test_data_continuous = {
-        let mut norm = Tensor::zeros(&[5_000], (tch::Kind::Float, tch::Device::Cpu));
-        let _ = norm.normal_(3.0, 1.0);
-        norm.iter::<f64>()
-            .unwrap()
-            // .map(|v| (v / 6.0 + 0.5).clamp(0.0, 1.0) as f32)
-            .map(|v| (v / 6.0).clamp(0.0, 1.0) as f32)
-            .collect::<Vec<_>>()
-    };
+pub unsafe extern "C" fn synth_net_fit(
+    columns: *const RawColumnData,
+    n_columns: usize,
+    n_rows: usize,
+    train_params: &TrainParams,
+) -> SynthNetHandle {
+    let handle = NET_HANDLES.lock().unwrap().new_id();
 
-    let test_data_discrete = {
-        // let norm = Tensor::rand(&[5_000], (tch::Kind::Float, tch::Device::Cpu));
-        // norm.iter::<f64>()
-        //     .unwrap()
-        //     .map(|v| (v * 10.0))
-        //     .map(|v| v.floor() as i32)
-        //     .collect::<Vec<_>>()
+    let column_data: Vec<_> = (0..n_columns)
+        .map(|i| {
+            let raw_col_data = &*columns.add(i);
 
-        test_data_continuous
-            .iter()
-            .map(|&v| if v >= 0.7 && v < 0.8 { 5 } else { 6 })
-            .collect::<Vec<_>>()
-    };
+            match raw_col_data.r#type {
+                RawColumnType::Continuous => ColumnDataRef::Continuous(slice::from_raw_parts(
+                    raw_col_data.data as *const f32,
+                    n_rows,
+                )),
+                RawColumnType::Discrete => ColumnDataRef::Discrete(slice::from_raw_parts(
+                    raw_col_data.data as *const i32,
+                    n_rows,
+                )),
+            }
+        })
+        .collect();
 
     let net = TVAE::fit(
-        &[
-            ColumnData::Discrete(test_data_discrete.clone()),
-            ColumnData::Continuous(test_data_continuous.clone()),
-        ],
-        2000,
-        500,
-        device,
+        &column_data,
+        train_params.batch_size,
+        tch::Device::Cpu,
+        |epoch, loss| (train_params.flow_control_callback)(epoch, loss),
     );
-    let generated = net.sample(5_000);
-    let ColumnData::Discrete(generated_column0) = &generated[0] else {
-            unreachable!()
-        };
-    let ColumnData::Continuous(generated_column1) = &generated[1] else {
-            unreachable!()
-        };
+    NET_STORAGE
+        .lock()
+        .unwrap()
+        .insert(handle, Arc::new(Mutex::new(net)));
 
-    {
-        println!("DISCRETE: Real dist:");
-        for u in 0..10 {
-            let count = test_data_discrete.iter().filter(|v| **v == u).count();
-            println!("{} - {}", u, count);
-        }
+    handle
+}
 
-        println!("DISCRETE: Fake dist:");
-        for u in 0..10 {
-            let count = generated_column0.iter().filter(|v| **v == u).count();
-            println!("{} - {}", u, count);
-        }
-    }
+/// Generates synthetic data using the specified NN.
+/// `n_samples`: number of rows to sample.
+///
+/// # Safety:
+/// The number of elements in `columns` array must be the same
+/// as the size of `columns` passed to `synth_net_fit`.
+#[no_mangle]
+pub unsafe extern "C" fn synth_net_sample(
+    net_handle: SynthNetHandle,
+    columns: *const *mut c_void,
+    n_samples: usize,
+) {
+    let net_storage = NET_STORAGE.lock().unwrap();
+    let net = net_storage
+        .get(&net_handle)
+        .expect("synth_net_sample: net_handle must be valid")
+        .lock()
+        .unwrap();
 
-    {
-        let buckets_real: Vec<_> = (0..10)
-            .map(|buck| {
-                let buck = buck as f32;
-                test_data_continuous
-                    .iter()
-                    .map(|v| *v * 10.0)
-                    .filter(|v| *v > buck && *v <= (buck + 1.0))
-                    .count()
-            })
-            .collect();
-        let buckets_generated: Vec<_> = (0..10)
-            .map(|buck| {
-                let buck = buck as f32;
-                generated_column1
-                    .iter()
-                    .map(|v| *v * 10.0)
-                    .filter(|v| *v >= buck && *v < (buck + 1.0))
-                    .count()
-            })
-            .collect();
+    let n_columns = net.n_columns();
+    let data = net.sample(n_samples);
 
-        println!(
-            "CONTINUOUS: Real dist ({}):",
-            buckets_real.iter().sum::<usize>()
-        );
-        for u in 0..10 {
-            println!("{} - {}", u, buckets_real[u]);
-        }
-
-        println!(
-            "CONTINUOUS: Fake dist ({}):",
-            buckets_generated.iter().sum::<usize>()
-        );
-        for u in 0..10 {
-            println!("{} - {}", u, buckets_generated[u]);
+    for (col_data, raw_col_data) in data.iter().zip(slice::from_raw_parts(columns, n_columns)) {
+        match col_data {
+            ColumnData::Discrete(data) => data
+                .as_ptr()
+                .copy_to_nonoverlapping(*raw_col_data as *mut i32, data.len()),
+            ColumnData::Continuous(data) => data
+                .as_ptr()
+                .copy_to_nonoverlapping(*raw_col_data as *mut f32, data.len()),
         }
     }
+}
 
-    let mut real_regular_count = 0;
-    let mut real_specific_count = 0;
-
-    for (&c0, &c1) in test_data_discrete.iter().zip(test_data_continuous.iter()) {
-        if c1 >= 0.7 && c1 < 0.8 && c0 == 5 {
-            real_specific_count += 1;
-        } else {
-            real_regular_count += 1;
-        }
-    }
-
-    let mut gen_regular_count = 0;
-    let mut gen_specific_count = 0;
-
-    for (&c0, &c1) in generated_column0.iter().zip(generated_column1.iter()) {
-        if c1 >= 0.7 && c1 < 0.8 && c0 == 5 {
-            gen_specific_count += 1;
-        } else {
-            gen_regular_count += 1;
-        }
-    }
-
-    println!(
-        "REAL: regular {}, specific {} ",
-        real_regular_count, real_specific_count
-    );
-    println!(
-        "GENERATED: regular {}, specific {} ",
-        gen_regular_count, gen_specific_count
-    );
+/// Destroys the specified NN.
+#[no_mangle]
+pub unsafe extern "C" fn synth_net_destroy(handle: SynthNetHandle) {
+    NET_HANDLES
+        .lock()
+        .unwrap()
+        .return_id(handle)
+        .expect("destroy_net: the network handle must be valid");
 }
