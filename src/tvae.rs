@@ -259,10 +259,6 @@ impl TVAE {
         }
     }
 
-    pub fn n_columns(&self) -> usize {
-        self.transformer.train_infos().len()
-    }
-
     pub fn sample(&self, samples: usize) -> Vec<ColumnData> {
         let n_steps = next_multiple_of(samples, self.batch_size) / self.batch_size;
         let n_columns = self.transformer.train_infos().len();

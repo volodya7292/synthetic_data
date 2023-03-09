@@ -4,6 +4,15 @@ pub enum ColumnData {
     Continuous(Vec<f32>),
 }
 
+impl ColumnData {
+    pub fn element_size(&self) -> usize {
+        match self {
+            ColumnData::Discrete(_) => 4,
+            ColumnData::Continuous(_) => 4,
+        }
+    }
+}
+
 pub enum ColumnDataRef<'a> {
     Discrete(&'a [i32]),
     Continuous(&'a [f32]),

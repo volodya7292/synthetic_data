@@ -87,7 +87,10 @@ pub unsafe extern "C" fn synth_net_fit(
 }
 
 /// Generates synthetic data using the specified NN.
+///
 /// `n_samples`: number of rows to sample.
+/// `columns`: a pointer to resulting column data in
+/// column-major order (column1_data, column2_data, ...)
 ///
 /// # Safety:
 /// The number of elements in `columns` array must be the same
@@ -95,7 +98,7 @@ pub unsafe extern "C" fn synth_net_fit(
 #[no_mangle]
 pub unsafe extern "C" fn synth_net_sample(
     net_handle: SynthNetHandle,
-    columns: *const *mut c_void,
+    columns: *mut c_void,
     n_samples: usize,
 ) {
     let net_storage = NET_STORAGE.lock().unwrap();
@@ -105,18 +108,20 @@ pub unsafe extern "C" fn synth_net_sample(
         .lock()
         .unwrap();
 
-    let n_columns = net.n_columns();
     let data = net.sample(n_samples);
+    let mut curr_out_ptr = columns;
 
-    for (col_data, raw_col_data) in data.iter().zip(slice::from_raw_parts(columns, n_columns)) {
+    for col_data in &data {
         match col_data {
             ColumnData::Discrete(data) => data
                 .as_ptr()
-                .copy_to_nonoverlapping(*raw_col_data as *mut i32, data.len()),
+                .copy_to_nonoverlapping(curr_out_ptr as *mut i32, data.len()),
             ColumnData::Continuous(data) => data
                 .as_ptr()
-                .copy_to_nonoverlapping(*raw_col_data as *mut f32, data.len()),
+                .copy_to_nonoverlapping(curr_out_ptr as *mut f32, data.len()),
         }
+
+        curr_out_ptr = curr_out_ptr.add(col_data.element_size() * n_samples);
     }
 }
 
