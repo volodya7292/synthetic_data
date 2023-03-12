@@ -3,8 +3,20 @@ pub mod input;
 
 use crate::tvae::data_transform::{ColumnTrainInfo, DataTransformer};
 use crate::tvae::input::{ColumnData, ColumnDataRef};
+use base64::Engine;
+use std::io::Cursor;
 use tch::nn::{Adam, Module, OptimizerConfig};
-use tch::{nn, Tensor};
+use tch::{nn, Device, Tensor};
+
+const JSON_DATA_TRANSFORMER_FIELD: &str = "data_transformer";
+const JSON_BATCH_SIZE_FIELD: &str = "batch_size";
+const JSON_NN_DATA_FIELD: &str = "nn_data";
+
+const LOSS_FACTOR: f32 = 2.0;
+const L2_SCALE: f64 = 1e-5;
+const EMBEDDING_DIM: i64 = 128;
+const COMPRESS_DIMS: [i64; 2] = [128, 128];
+const DECOMPRESS_DIMS: [i64; 2] = [128, 128];
 
 struct Encoder {
     seq: nn::Sequential,
@@ -143,10 +155,10 @@ fn calc_loss(
 }
 
 pub struct TVAE {
-    device: tch::Device,
+    vs: nn::VarStore,
+    device: Device,
     decoder: Decoder,
     batch_size: usize,
-    embedding_dim: i64,
     transformer: DataTransformer,
 }
 
@@ -162,20 +174,14 @@ impl TVAE {
     pub fn fit<F: Fn(usize, f64) -> DoStop>(
         data: &[ColumnDataRef],
         batch_size: usize,
-        device: tch::Device,
+        device: Device,
         flow_control: F,
     ) -> Self {
         let vs = nn::VarStore::new(device);
         assert!(data.len() > 0);
 
-        let loss_factor = 2.0_f32;
-        let l2scale = 1e-5;
-        let embedding_dim = 128;
-        let compress_dims = [128, 128];
-        let decompress_dims = [128, 128];
-
         let transformer = DataTransformer::prepare(data);
-        let n_rows = transformer.n_rows() as i64;
+        let n_rows = data[0].len() as i64;
 
         let train_data = Tensor::cat(
             &data
@@ -193,10 +199,10 @@ impl TVAE {
             .map(|v| v.total_dim())
             .sum::<i64>();
 
-        let encoder = Encoder::new(&vs.root(), data_dim, &compress_dims, embedding_dim);
-        let decoder = Decoder::new(&vs.root(), embedding_dim, &decompress_dims, data_dim);
+        let encoder = Encoder::new(&vs.root(), data_dim, &COMPRESS_DIMS, EMBEDDING_DIM);
+        let decoder = Decoder::new(&vs.root(), EMBEDDING_DIM, &DECOMPRESS_DIMS, data_dim);
 
-        let mut optimizer = Adam::default().wd(l2scale).build(&vs, 1e-3).unwrap();
+        let mut optimizer = Adam::default().wd(L2_SCALE).build(&vs, 1e-3).unwrap();
         let mut epoch = 0;
 
         loop {
@@ -229,8 +235,8 @@ impl TVAE {
                     &sigmas,
                     &mu,
                     &log_var,
-                    transformer.train_infos(),
-                    loss_factor,
+                    &transformer.train_infos(),
+                    LOSS_FACTOR,
                 );
                 let loss = &loss1 + &loss2;
 
@@ -251,10 +257,60 @@ impl TVAE {
         }
 
         Self {
+            vs,
             decoder,
             batch_size,
-            embedding_dim,
             device,
+            transformer,
+        }
+    }
+
+    pub fn save(&self) -> serde_json::Value {
+        let transformer_data = self.transformer.save();
+        let batch_size = serde_json::Value::Number(self.batch_size.into());
+
+        let mut nn_data = Vec::with_capacity(1024 * 1024);
+        self.vs.save_to_stream(&mut nn_data).unwrap();
+
+        let nn_data_base64 = serde_json::Value::String(
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(nn_data),
+        );
+
+        let mut map = serde_json::Map::new();
+        map.insert(JSON_DATA_TRANSFORMER_FIELD.to_owned(), transformer_data);
+        map.insert(JSON_BATCH_SIZE_FIELD.to_owned(), batch_size);
+        map.insert(JSON_NN_DATA_FIELD.to_owned(), nn_data_base64);
+
+        serde_json::Value::Object(map)
+    }
+
+    pub fn load(device: Device, data: serde_json::Value) -> Self {
+        let data = data.as_object().unwrap();
+        let transformer_data = data.get(JSON_DATA_TRANSFORMER_FIELD).unwrap();
+        let batch_size = data.get(JSON_BATCH_SIZE_FIELD).unwrap().as_u64().unwrap();
+        let nn_data_base64 = data.get(JSON_NN_DATA_FIELD).unwrap().as_str().unwrap();
+
+        let transformer = DataTransformer::load(transformer_data);
+
+        let nn_data = base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(nn_data_base64)
+            .unwrap();
+
+        let data_dim = transformer
+            .train_infos()
+            .iter()
+            .map(|v| v.total_dim())
+            .sum::<i64>();
+
+        let mut vs = nn::VarStore::new(device);
+        let decoder = Decoder::new(&vs.root(), EMBEDDING_DIM, &DECOMPRESS_DIMS, data_dim);
+        vs.load_from_stream(Cursor::new(nn_data)).unwrap();
+
+        Self {
+            vs,
+            device,
+            decoder,
+            batch_size: batch_size as usize,
             transformer,
         }
     }
@@ -267,7 +323,7 @@ impl TVAE {
 
         for _ in 0..n_steps {
             let mut noise = Tensor::zeros(
-                &[self.batch_size as i64, self.embedding_dim],
+                &[self.batch_size as i64, EMBEDDING_DIM],
                 (tch::Kind::Float, self.device),
             );
             let _ = noise.normal_(0.0, 1.0);
@@ -275,7 +331,7 @@ impl TVAE {
             let (fake, _sigmas) = self.decoder.decode(&noise);
             let fake = fake.tanh();
 
-            raw_data.push(fake.detach().to(tch::Device::Cpu));
+            raw_data.push(fake.detach().to(Device::Cpu));
         }
 
         let generated = Tensor::cat(&raw_data, 0);

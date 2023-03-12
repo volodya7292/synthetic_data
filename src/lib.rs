@@ -1,15 +1,17 @@
 #[cfg(test)]
 mod tests;
-mod tvae;
+pub mod tvae;
 
 use crate::tvae::input::{ColumnData, ColumnDataRef};
 use crate::tvae::TVAE;
 use index_pool::IndexPool;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::slice;
 use std::sync::{Arc, Mutex};
+
+pub type SynthNetHandle = usize;
 
 #[derive(Debug)]
 #[repr(u32)]
@@ -38,7 +40,11 @@ pub struct TrainParams {
     flow_control_callback: FlowControlCallback,
 }
 
-pub type SynthNetHandle = usize;
+#[derive(Debug)]
+#[repr(C)]
+pub struct SynthNetSnapshot {
+    c_str: *const c_char,
+}
 
 lazy_static! {
     static ref NET_HANDLES: Mutex<IndexPool> = Default::default();
@@ -123,6 +129,49 @@ pub unsafe extern "C" fn synth_net_sample(
 
         curr_out_ptr = curr_out_ptr.add(col_data.element_size() * n_samples);
     }
+}
+
+/// Saves network state into a snapshot.
+#[no_mangle]
+pub unsafe extern "C" fn synth_net_create_snapshot(net_handle: SynthNetHandle) -> SynthNetSnapshot {
+    let net_storage = NET_STORAGE.lock().unwrap();
+    let net = net_storage
+        .get(&net_handle)
+        .expect("synth_net_sample: net_handle must be valid")
+        .lock()
+        .unwrap();
+
+    let val = net.save();
+    let val_str = serde_json::to_string(&val).unwrap();
+    let val_c_str = CString::new(val_str).unwrap();
+
+    SynthNetSnapshot {
+        c_str: val_c_str.into_raw(),
+    }
+}
+
+/// Destroys the specified snapshot.
+#[no_mangle]
+pub unsafe extern "C" fn synth_net_create_from_snapshot(
+    snapshot: &SynthNetSnapshot,
+) -> SynthNetHandle {
+    let handle = NET_HANDLES.lock().unwrap().new_id();
+
+    let data_str = CStr::from_ptr(snapshot.c_str).to_str().unwrap();
+    let net = TVAE::load(tch::Device::Cpu, serde_json::from_str(data_str).unwrap());
+
+    NET_STORAGE
+        .lock()
+        .unwrap()
+        .insert(handle, Arc::new(Mutex::new(net)));
+
+    handle
+}
+
+/// Destroys the specified snapshot.
+#[no_mangle]
+pub unsafe extern "C" fn synth_net_snapshot_destroy(snapshot: &SynthNetSnapshot) {
+    drop(CString::from_raw(snapshot.c_str as *mut _));
 }
 
 /// Destroys the specified NN.

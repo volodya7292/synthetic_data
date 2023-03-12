@@ -1,4 +1,5 @@
 use crate::tvae::input::{ColumnData, ColumnDataRef};
+use serde::{Deserialize, Serialize};
 use tch::Tensor;
 
 pub struct SpanInfo {
@@ -20,24 +21,21 @@ impl ColumnTrainInfo {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub enum ColumnInfo {
     Discrete { unique_categories: Vec<i32> },
     Continuous { min: f32, max: f32 },
 }
 
 pub struct DataTransformer {
-    fit_infos: Vec<ColumnInfo>,
-    train_infos: Vec<ColumnTrainInfo>,
-    n_rows: usize,
+    column_infos: Vec<ColumnInfo>,
 }
 
 impl DataTransformer {
     pub fn prepare(columns: &[ColumnDataRef]) -> Self {
         if columns.is_empty() {
             return Self {
-                fit_infos: vec![],
-                train_infos: vec![],
-                n_rows: 0,
+                column_infos: vec![],
             };
         }
 
@@ -77,7 +75,13 @@ impl DataTransformer {
             })
             .collect();
 
-        let train_infos: Vec<_> = columns
+        Self {
+            column_infos: columns,
+        }
+    }
+
+    pub fn train_infos(&self) -> Vec<ColumnTrainInfo> {
+        self.column_infos
             .iter()
             .map(|data| match data {
                 ColumnInfo::Discrete {
@@ -95,18 +99,22 @@ impl DataTransformer {
                     }],
                 },
             })
-            .collect();
+            .collect()
+    }
 
+    pub fn save(&self) -> serde_json::Value {
+        serde_json::to_value(&self.column_infos).unwrap()
+    }
+
+    pub fn load(data: &serde_json::Value) -> Self {
         Self {
-            fit_infos: columns,
-            train_infos,
-            n_rows,
+            column_infos: Vec::<ColumnInfo>::deserialize(data).unwrap(),
         }
     }
 
     pub fn transform(&self, column_index: usize, data: &ColumnDataRef) -> Tensor {
-        let column_info = &self.fit_infos[column_index];
-        let n_rows = self.n_rows as i64;
+        let column_info = &self.column_infos[column_index];
+        let n_rows = data.len() as i64;
 
         match (data, column_info) {
             (
@@ -143,7 +151,7 @@ impl DataTransformer {
     pub fn inverse_transform(&self, column_index: usize, data: &Tensor) -> ColumnData {
         let n_rows = data.size()[0];
 
-        match &self.fit_infos[column_index] {
+        match &self.column_infos[column_index] {
             ColumnInfo::Discrete {
                 unique_categories, ..
             } => {
@@ -172,13 +180,5 @@ impl DataTransformer {
                 ColumnData::Continuous(out_data)
             }
         }
-    }
-
-    pub fn n_rows(&self) -> usize {
-        self.n_rows
-    }
-
-    pub fn train_infos(&self) -> &[ColumnTrainInfo] {
-        &self.train_infos
     }
 }
