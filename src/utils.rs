@@ -1,4 +1,6 @@
+use crate::tvae::input::ColumnDataRef;
 use std::collections::HashMap;
+use tch::Tensor;
 
 /// Returns map of counts for each unique element.
 pub(crate) fn calc_discrete_pdf(uniques: &[i32], data: &[i32]) -> Vec<usize> {
@@ -52,4 +54,25 @@ pub(crate) fn l1_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
         .fold(0.0, |accum, (v1, v2)| accum + (v1 - v2).abs());
 
     diff_sum / n_buckets as f32
+}
+
+/// Calculates correlation matrix for given columns. Returned data is in row-major order.
+pub(crate) fn calc_correlation_matrix(data: &[ColumnDataRef]) -> Vec<f32> {
+    let variables: Vec<_> = data
+        .iter()
+        .map(|col| match col {
+            ColumnDataRef::Discrete(data) => Tensor::of_slice(data),
+            ColumnDataRef::Continuous(data) => Tensor::of_slice(data),
+        })
+        .collect();
+
+    let tensor = Tensor::stack(&variables, 0);
+    let corr_mat = tensor.corrcoef();
+    let flattened_mat = corr_mat.flatten(0, 1);
+
+    let mut data = vec![0.0_f32; flattened_mat.size1().unwrap() as usize];
+    for (out_v, in_v) in data.iter_mut().zip(flattened_mat.iter::<f64>().unwrap()) {
+        *out_v = in_v as f32;
+    }
+    data
 }

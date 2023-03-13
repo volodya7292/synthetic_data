@@ -65,8 +65,10 @@ impl ColumnInfo {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct DataTransformer {
     column_infos: Vec<ColumnInfo>,
+    correlation_matrix: Vec<f32>,
 }
 
 impl DataTransformer {
@@ -74,6 +76,7 @@ impl DataTransformer {
         if columns.is_empty() {
             return Self {
                 column_infos: vec![],
+                correlation_matrix: vec![],
             };
         }
 
@@ -82,7 +85,7 @@ impl DataTransformer {
             panic!("All columns must have the same number of rows");
         }
 
-        let columns: Vec<_> = columns
+        let column_infos: Vec<_> = columns
             .iter()
             .map(|column| match column {
                 ColumnDataRef::Discrete(data) => {
@@ -119,8 +122,11 @@ impl DataTransformer {
             })
             .collect();
 
+        let correlation_matrix = utils::calc_correlation_matrix(columns);
+
         Self {
-            column_infos: columns,
+            column_infos,
+            correlation_matrix,
         }
     }
 
@@ -150,14 +156,16 @@ impl DataTransformer {
         &self.column_infos
     }
 
+    pub fn correlation_matrix(&self) -> &[f32] {
+        &self.correlation_matrix
+    }
+
     pub fn save(&self) -> serde_json::Value {
-        serde_json::to_value(&self.column_infos).unwrap()
+        serde_json::to_value(&self).unwrap()
     }
 
     pub fn load(data: &serde_json::Value) -> Self {
-        Self {
-            column_infos: Vec::<ColumnInfo>::deserialize(data).unwrap(),
-        }
+        Self::deserialize(data).unwrap()
     }
 
     pub fn transform(&self, column_index: usize, data: &ColumnDataRef) -> Tensor {

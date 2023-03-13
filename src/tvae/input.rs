@@ -49,6 +49,13 @@ impl SampledColumnData {
         }
     }
 
+    pub fn data_as_ref(&self) -> ColumnDataRef {
+        match self {
+            Self::Discrete(data, ..) => ColumnDataRef::Discrete(data),
+            Self::Continuous(data, ..) => ColumnDataRef::Continuous(data),
+        }
+    }
+
     pub fn element_size(&self) -> usize {
         match self {
             Self::Discrete(..) => 4,

@@ -3,6 +3,7 @@ pub mod input;
 
 use crate::tvae::data_transform::{ColumnTrainInfo, DataTransformer};
 use crate::tvae::input::{ColumnDataRef, SampledColumnData};
+use crate::utils;
 use base64::Engine;
 use std::io::Cursor;
 use tch::nn::{Adam, Module, OptimizerConfig};
@@ -169,6 +170,7 @@ fn next_multiple_of(n: usize, multiple: usize) -> usize {
 
 pub type DoStop = bool;
 pub type Realness = f32;
+pub type CorrelationRealness = f32;
 
 impl TVAE {
     /// `flow_control`: Fn(epoch, loss) -> DoStop
@@ -316,7 +318,7 @@ impl TVAE {
         }
     }
 
-    pub fn sample(&self, samples: usize) -> Vec<SampledColumnData> {
+    pub fn sample(&self, samples: usize) -> (Vec<SampledColumnData>, CorrelationRealness) {
         let n_steps = next_multiple_of(samples, self.batch_size) / self.batch_size;
         let n_columns = self.transformer.train_infos().len();
         let mut generated_columns = Vec::<SampledColumnData>::with_capacity(n_columns);
@@ -336,7 +338,6 @@ impl TVAE {
         }
 
         let generated = Tensor::cat(&raw_data, 0);
-
         let mut start_idx = 0;
 
         for (i, train_info) in self.transformer.train_infos().iter().enumerate() {
@@ -356,6 +357,22 @@ impl TVAE {
             start_idx = end_idx;
         }
 
-        generated_columns
+        let real_corr_mat = self.transformer.correlation_matrix();
+        let generated_corr_mat = utils::calc_correlation_matrix(
+            &generated_columns
+                .iter()
+                .map(|v| v.data_as_ref())
+                .collect::<Vec<_>>(),
+        );
+
+        let corr_realness = 1.0
+            - real_corr_mat
+                .iter()
+                .zip(&generated_corr_mat)
+                .map(|(v1, v2)| (v1.abs() - v2.abs()).abs())
+                .sum::<f32>()
+                / real_corr_mat.len() as f32;
+
+        (generated_columns, corr_realness)
     }
 }

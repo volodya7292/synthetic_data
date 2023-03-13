@@ -99,6 +99,7 @@ pub unsafe extern "C" fn synth_net_fit(
 /// `out_data`: a pointer to resulting column data in
 /// column-major order (column1_data, column2_data, ...)
 /// `out_realness`: a pointer to an array of realness metrics (in range \[0;1\]) for each column.
+/// `out_correlation_realness`: overall column correlation realness
 ///
 /// # Safety:
 /// The number of elements in `columns` array must be the same
@@ -108,6 +109,7 @@ pub unsafe extern "C" fn synth_net_sample(
     net_handle: SynthNetHandle,
     out_data: *mut c_void,
     out_realness: *mut f32,
+    out_correlation_realness: *mut f32,
     n_samples: usize,
 ) {
     let net_storage = NET_STORAGE.lock().unwrap();
@@ -117,7 +119,7 @@ pub unsafe extern "C" fn synth_net_sample(
         .lock()
         .unwrap();
 
-    let data = net.sample(n_samples);
+    let (data, corr_realness) = net.sample(n_samples);
 
     let mut curr_out_ptr = out_data;
     let mut curr_out_realness_ptr = out_realness;
@@ -137,6 +139,8 @@ pub unsafe extern "C" fn synth_net_sample(
         curr_out_ptr = curr_out_ptr.add(col_data.element_size() * n_samples);
         curr_out_realness_ptr = curr_out_realness_ptr.add(1);
     }
+
+    out_correlation_realness.write(corr_realness)
 }
 
 /// Saves network state into a snapshot.
