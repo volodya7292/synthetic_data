@@ -2,7 +2,7 @@ mod data_transform;
 pub mod input;
 
 use crate::tvae::data_transform::{ColumnTrainInfo, DataTransformer};
-use crate::tvae::input::{ColumnData, ColumnDataRef};
+use crate::tvae::input::{ColumnDataRef, SampledColumnData};
 use base64::Engine;
 use std::io::Cursor;
 use tch::nn::{Adam, Module, OptimizerConfig};
@@ -168,6 +168,7 @@ fn next_multiple_of(n: usize, multiple: usize) -> usize {
 }
 
 pub type DoStop = bool;
+pub type Realness = f32;
 
 impl TVAE {
     /// `flow_control`: Fn(epoch, loss) -> DoStop
@@ -315,10 +316,10 @@ impl TVAE {
         }
     }
 
-    pub fn sample(&self, samples: usize) -> Vec<ColumnData> {
+    pub fn sample(&self, samples: usize) -> Vec<SampledColumnData> {
         let n_steps = next_multiple_of(samples, self.batch_size) / self.batch_size;
         let n_columns = self.transformer.train_infos().len();
-        let mut generated_columns = Vec::<ColumnData>::with_capacity(n_columns);
+        let mut generated_columns = Vec::<SampledColumnData>::with_capacity(n_columns);
         let mut raw_data = Vec::with_capacity(n_steps * self.batch_size);
 
         for _ in 0..n_steps {
@@ -348,9 +349,10 @@ impl TVAE {
             );
 
             let inverse_data = self.transformer.inverse_transform(i, &generated_column);
+            let col_info = &self.transformer.column_infos()[i];
+            let realness = 1.0 - col_info.calc_l1_distance(&inverse_data);
 
-            generated_columns.push(inverse_data);
-
+            generated_columns.push(SampledColumnData::from_regular(inverse_data, realness));
             start_idx = end_idx;
         }
 

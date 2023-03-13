@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests;
 pub mod tvae;
+mod utils;
 
-use crate::tvae::input::{ColumnData, ColumnDataRef};
+use crate::tvae::input::{ColumnDataRef, SampledColumnData};
 use crate::tvae::TVAE;
 use index_pool::IndexPool;
 use lazy_static::lazy_static;
@@ -95,8 +96,9 @@ pub unsafe extern "C" fn synth_net_fit(
 /// Generates synthetic data using the specified NN.
 ///
 /// `n_samples`: number of rows to sample.
-/// `columns`: a pointer to resulting column data in
+/// `out_data`: a pointer to resulting column data in
 /// column-major order (column1_data, column2_data, ...)
+/// `out_realness`: a pointer to an array of realness metrics (in range \[0;1\]) for each column.
 ///
 /// # Safety:
 /// The number of elements in `columns` array must be the same
@@ -104,7 +106,8 @@ pub unsafe extern "C" fn synth_net_fit(
 #[no_mangle]
 pub unsafe extern "C" fn synth_net_sample(
     net_handle: SynthNetHandle,
-    columns: *mut c_void,
+    out_data: *mut c_void,
+    out_realness: *mut f32,
     n_samples: usize,
 ) {
     let net_storage = NET_STORAGE.lock().unwrap();
@@ -115,19 +118,24 @@ pub unsafe extern "C" fn synth_net_sample(
         .unwrap();
 
     let data = net.sample(n_samples);
-    let mut curr_out_ptr = columns;
 
-    for col_data in &data {
-        match col_data {
-            ColumnData::Discrete(data) => data
+    let mut curr_out_ptr = out_data;
+    let mut curr_out_realness_ptr = out_realness;
+
+    for col_data in data {
+        match &col_data {
+            SampledColumnData::Discrete(data, ..) => data
                 .as_ptr()
                 .copy_to_nonoverlapping(curr_out_ptr as *mut i32, data.len()),
-            ColumnData::Continuous(data) => data
+            SampledColumnData::Continuous(data, ..) => data
                 .as_ptr()
                 .copy_to_nonoverlapping(curr_out_ptr as *mut f32, data.len()),
         }
 
+        curr_out_realness_ptr.write(col_data.realness());
+
         curr_out_ptr = curr_out_ptr.add(col_data.element_size() * n_samples);
+        curr_out_realness_ptr = curr_out_realness_ptr.add(1);
     }
 }
 

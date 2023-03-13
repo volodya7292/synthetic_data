@@ -1,4 +1,5 @@
 use crate::tvae::input::{ColumnData, ColumnDataRef};
+use crate::utils;
 use serde::{Deserialize, Serialize};
 use tch::Tensor;
 
@@ -23,8 +24,44 @@ impl ColumnTrainInfo {
 
 #[derive(Serialize, Deserialize)]
 pub enum ColumnInfo {
-    Discrete { unique_categories: Vec<i32> },
-    Continuous { min: f32, max: f32 },
+    Discrete {
+        unique_categories: Vec<i32>,
+        pdf: Vec<usize>,
+    },
+    Continuous {
+        min: f32,
+        max: f32,
+        pdf: Vec<usize>,
+    },
+}
+
+impl ColumnInfo {
+    pub fn calc_l1_distance(&self, data: &ColumnData) -> f32 {
+        match (self, data) {
+            (
+                ColumnInfo::Discrete {
+                    unique_categories,
+                    pdf: real_pdf,
+                },
+                ColumnData::Discrete(data),
+            ) => {
+                let data_pdf = utils::calc_discrete_pdf(unique_categories, data);
+                utils::l1_distance_between_pdfs(&data_pdf, real_pdf)
+            }
+            (
+                ColumnInfo::Continuous {
+                    min,
+                    max,
+                    pdf: real_pdf,
+                },
+                ColumnData::Continuous(data),
+            ) => {
+                let data_pdf = utils::calc_continuous_pdf(*min, *max, data);
+                utils::l1_distance_between_pdfs(&data_pdf, real_pdf)
+            }
+            _ => panic!("Invalid combination"),
+        }
+    }
 }
 
 pub struct DataTransformer {
@@ -52,8 +89,11 @@ impl DataTransformer {
                     uniques.sort_unstable();
                     uniques.dedup();
 
+                    let pdf = utils::calc_discrete_pdf(&uniques, data);
+
                     ColumnInfo::Discrete {
                         unique_categories: uniques,
+                        pdf,
                     }
                 }
                 ColumnDataRef::Continuous(data) => {
@@ -70,7 +110,9 @@ impl DataTransformer {
                         .max_by(|a, b| a.total_cmp(&b))
                         .unwrap_or(f32::NAN);
 
-                    ColumnInfo::Continuous { min, max }
+                    let pdf = utils::calc_continuous_pdf(min, max, data);
+
+                    ColumnInfo::Continuous { min, max, pdf }
                 }
             })
             .collect();
@@ -100,6 +142,10 @@ impl DataTransformer {
                 },
             })
             .collect()
+    }
+
+    pub fn column_infos(&self) -> &[ColumnInfo] {
+        &self.column_infos
     }
 
     pub fn save(&self) -> serde_json::Value {
