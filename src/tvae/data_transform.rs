@@ -56,7 +56,8 @@ impl ColumnInfo {
                 },
                 ColumnData::Continuous(data),
             ) => {
-                let data_pdf = utils::calc_continuous_pdf(*min, *max, data);
+                let n_buckets = real_pdf.len();
+                let data_pdf = utils::calc_continuous_pdf(*min, *max, data, n_buckets);
                 utils::l1_distance_between_pdfs(&data_pdf, real_pdf)
             }
             _ => panic!("Invalid combination"),
@@ -110,7 +111,8 @@ impl DataTransformer {
                         .max_by(|a, b| a.total_cmp(&b))
                         .unwrap_or(f32::NAN);
 
-                    let pdf = utils::calc_continuous_pdf(min, max, data);
+                    let n_buckets = (data.len() as f64).sqrt().max(1.0) as usize;
+                    let pdf = utils::calc_continuous_pdf(min, max, data, n_buckets);
 
                     ColumnInfo::Continuous { min, max, pdf }
                 }

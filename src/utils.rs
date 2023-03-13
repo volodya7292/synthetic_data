@@ -17,10 +17,13 @@ pub(crate) fn calc_discrete_pdf(uniques: &[i32], data: &[i32]) -> Vec<usize> {
 }
 
 /// Returns map of counts for each unique element.
-pub(crate) fn calc_continuous_pdf(min: f32, max: f32, data: &[f32]) -> Vec<usize> {
-    let n_buckets = (data.len() as f32).sqrt().ceil().max(1.0) as usize;
+pub(crate) fn calc_continuous_pdf(
+    min: f32,
+    max: f32,
+    data: &[f32],
+    n_buckets: usize,
+) -> Vec<usize> {
     let bucket_size = (max - min) / n_buckets as f32;
-
     let mut buckets = vec![0_usize; n_buckets as usize];
 
     for v in data {
