@@ -1,7 +1,7 @@
-mod data_transform;
+mod data_transformer;
 pub mod input;
 
-use crate::tvae::data_transform::{ColumnTrainInfo, DataTransformer};
+use crate::tvae::data_transformer::{ColumnTrainInfo, DataTransformer};
 use crate::tvae::input::{ColumnDataRef, SampledColumnData};
 use crate::utils;
 use base64::Engine;
