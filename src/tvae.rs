@@ -369,7 +369,13 @@ impl TVAE {
             - real_corr_mat
                 .iter()
                 .zip(&generated_corr_mat)
-                .map(|(v1, v2)| (v1.abs() - v2.abs()).abs())
+                .map(|(v1, v2)| {
+                    if v1.is_finite() && v2.is_finite() {
+                        (v1.abs() - v2.abs()).abs()
+                    } else {
+                        1.0
+                    }
+                })
                 .sum::<f32>()
                 / real_corr_mat.len() as f32;
 

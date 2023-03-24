@@ -1,6 +1,6 @@
 use crate::tvae::input::{ColumnData, ColumnDataRef};
 use crate::utils;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tch::Tensor;
 
 pub struct SpanInfo {
@@ -68,7 +68,19 @@ impl ColumnInfo {
 #[derive(Serialize, Deserialize)]
 pub struct DataTransformer {
     column_infos: Vec<ColumnInfo>,
+    #[serde(deserialize_with = "deserialize_correlation_matrix")]
     correlation_matrix: Vec<f32>,
+}
+
+fn deserialize_correlation_matrix<'de, D>(deserializer: D) -> Result<Vec<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let str_vec: Vec<serde_json::Value> = Deserialize::deserialize(deserializer)?;
+    Ok(str_vec
+        .iter()
+        .map(|str| str.as_f64().unwrap_or(f64::NAN) as f32)
+        .collect())
 }
 
 impl DataTransformer {
