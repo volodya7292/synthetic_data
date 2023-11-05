@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-tch = { version = "0.10", default-features = false }
+tch = { version = "0.14", default-features = false }
 rand = "0.8"
 rand_distr = "0.4"
 lazy_static = "1.4"

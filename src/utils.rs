@@ -61,8 +61,8 @@ pub(crate) fn calc_correlation_matrix(data: &[ColumnDataRef]) -> Vec<f32> {
     let variables: Vec<_> = data
         .iter()
         .map(|col| match col {
-            ColumnDataRef::Discrete(data) => Tensor::of_slice(data),
-            ColumnDataRef::Continuous(data) => Tensor::of_slice(data),
+            ColumnDataRef::Discrete(data) => Tensor::from_slice(data),
+            ColumnDataRef::Continuous(data) => Tensor::from_slice(data),
         })
         .collect();
 

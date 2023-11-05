@@ -193,8 +193,8 @@ impl DataTransformer {
             ) => {
                 let n_uniques = unique_categories.len() as i64;
 
-                let data_tensor = Tensor::of_slice(data);
-                let uniques_tensor = Tensor::of_slice(&unique_categories);
+                let data_tensor = Tensor::from_slice(data);
+                let uniques_tensor = Tensor::from_slice(&unique_categories);
 
                 let data_x_uniques = data_tensor.broadcast_to(&[n_uniques, n_rows]);
                 let uniques_x_data = uniques_tensor.broadcast_to(&[n_rows, n_uniques]);
@@ -206,7 +206,7 @@ impl DataTransformer {
             }
             (ColumnDataRef::Continuous(data), ColumnInfo::Continuous { min, max, .. }) => {
                 let range = max - min;
-                let filtered = Tensor::of_slice(data);
+                let filtered = Tensor::from_slice(data);
                 let normalized = (filtered - *min as f64) / range as f64;
                 let transformed = normalized.reshape(&[data.len() as i64, 1]);
 
