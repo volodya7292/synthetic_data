@@ -114,7 +114,7 @@ fn calc_loss(
 
     for column_info in output_info {
         for span_info in column_info.output_spans() {
-            let ed = st + span_info.dim as i64;
+            let ed = st + span_info.dim;
 
             if span_info.activation != "softmax" {
                 let x_slice = x.slice(1, Some(st), Some(st + 1), 1);
@@ -181,7 +181,7 @@ impl TVAE {
         flow_control: F,
     ) -> Self {
         let vs = nn::VarStore::new(device);
-        assert!(data.len() > 0);
+        assert!(!data.is_empty());
 
         let transformer = DataTransformer::prepare(data);
         let n_rows = data[0].len() as i64;
@@ -209,7 +209,7 @@ impl TVAE {
         let mut epoch = 0;
 
         loop {
-            let shuffle_perm = Tensor::randperm(n_rows, (tch::Kind::Int64, device));
+            let shuffle_perm = Tensor::randperm(n_rows, (tch::Kind::Int64, tch::Device::Cpu));
             let curr_train_data = train_data.index(&[Some(shuffle_perm)]);
 
             let mut total_loss = 0.0;
@@ -326,7 +326,7 @@ impl TVAE {
 
         for _ in 0..n_steps {
             let mut noise = Tensor::zeros(
-                &[self.batch_size as i64, EMBEDDING_DIM],
+                [self.batch_size as i64, EMBEDDING_DIM],
                 (tch::Kind::Float, self.device),
             );
             let _ = noise.normal_(0.0, 1.0);

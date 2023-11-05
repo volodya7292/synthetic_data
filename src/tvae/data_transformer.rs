@@ -118,12 +118,12 @@ impl DataTransformer {
                     let min = filtered
                         .iter()
                         .cloned()
-                        .min_by(|a, b| a.total_cmp(&b))
+                        .min_by(|a, b| a.total_cmp(b))
                         .unwrap_or(f32::NAN);
                     let max = filtered
                         .iter()
                         .cloned()
-                        .max_by(|a, b| a.total_cmp(&b))
+                        .max_by(|a, b| a.total_cmp(b))
                         .unwrap_or(f32::NAN);
 
                     let n_buckets = (data.len() as f64).sqrt().max(1.0) as usize;
@@ -173,7 +173,7 @@ impl DataTransformer {
     }
 
     pub fn save(&self) -> serde_json::Value {
-        serde_json::to_value(&self).unwrap()
+        serde_json::to_value(self).unwrap()
     }
 
     pub fn load(data: &serde_json::Value) -> Self {
@@ -194,10 +194,10 @@ impl DataTransformer {
                 let n_uniques = unique_categories.len() as i64;
 
                 let data_tensor = Tensor::from_slice(data);
-                let uniques_tensor = Tensor::from_slice(&unique_categories);
+                let uniques_tensor = Tensor::from_slice(unique_categories);
 
-                let data_x_uniques = data_tensor.broadcast_to(&[n_uniques, n_rows]);
-                let uniques_x_data = uniques_tensor.broadcast_to(&[n_rows, n_uniques]);
+                let data_x_uniques = data_tensor.broadcast_to([n_uniques, n_rows]);
+                let uniques_x_data = uniques_tensor.broadcast_to([n_rows, n_uniques]);
 
                 let hot_vectors = data_x_uniques.transpose(0, 1).eq_tensor(&uniques_x_data);
                 let transformed = hot_vectors.totype(tch::Kind::Int8);
@@ -208,7 +208,7 @@ impl DataTransformer {
                 let range = max - min;
                 let filtered = Tensor::from_slice(data);
                 let normalized = (filtered - *min as f64) / range as f64;
-                let transformed = normalized.reshape(&[data.len() as i64, 1]);
+                let transformed = normalized.reshape([data.len() as i64, 1]);
 
                 transformed
             }

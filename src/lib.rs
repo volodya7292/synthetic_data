@@ -101,7 +101,7 @@ pub unsafe extern "C" fn synth_net_fit(
 /// `out_realness`: a pointer to an array of realness metrics (in range \[0;1\]) for each column.
 /// `out_correlation_realness`: overall column correlation realness
 ///
-/// # Safety:
+/// # Safety
 /// The number of elements in `columns` array must be the same
 /// as the size of `columns` passed to `synth_net_fit`.
 #[no_mangle]

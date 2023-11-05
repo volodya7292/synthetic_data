@@ -26,7 +26,7 @@ pub(crate) fn calc_continuous_pdf(
     n_buckets: usize,
 ) -> Vec<usize> {
     let bucket_size = (max - min) / n_buckets as f32;
-    let mut buckets = vec![0_usize; n_buckets as usize];
+    let mut buckets = vec![0_usize; n_buckets];
 
     for v in data {
         let bucket_idx = (((v - min) / bucket_size) as usize).min(n_buckets - 1);
@@ -45,8 +45,8 @@ pub(crate) fn l1_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
     let count1 = pdf1.iter().sum::<usize>() as f32;
     let count2 = pdf2.iter().sum::<usize>() as f32;
 
-    let pdf1_norm: Vec<_> = pdf1.iter().map(|v| *v as f32 / count1 as f32).collect();
-    let pdf2_norm: Vec<_> = pdf2.iter().map(|v| *v as f32 / count2 as f32).collect();
+    let pdf1_norm: Vec<_> = pdf1.iter().map(|v| *v as f32 / count1).collect();
+    let pdf2_norm: Vec<_> = pdf2.iter().map(|v| *v as f32 / count2).collect();
 
     let diff_sum = pdf1_norm
         .iter()
