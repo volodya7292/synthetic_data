@@ -210,7 +210,7 @@ impl TVAE {
 
         loop {
             let shuffle_perm = Tensor::randperm(n_rows, (tch::Kind::Int64, tch::Device::Cpu));
-            let curr_train_data = train_data.index(&[Some(shuffle_perm)]);
+            let curr_train_data = train_data.index(&[Some(shuffle_perm)]).to(device);
 
             let mut total_loss = 0.0;
             let mut loss_count = 0.0;
@@ -218,23 +218,22 @@ impl TVAE {
             for batch_start in (0..n_rows).step_by(batch_size) {
                 optimizer.zero_grad();
 
-                let batch = curr_train_data.slice(
+                let batch_real = curr_train_data.slice(
                     0,
                     Some(batch_start),
                     Some((batch_start + batch_size as i64).min(n_rows)),
                     1,
                 );
-                let real = batch.to(device);
 
-                let (mu, std, log_var) = encoder.encode(&real);
+                let (mu, std, log_var) = encoder.encode(&batch_real);
 
-                let eps = std.randn_like();
-                let emb = &eps * &std + &mu;
-                let (rec, sigmas) = decoder.decode(&emb);
+                let random_deviations = std.randn_like();
+                let latents = &random_deviations * &std + &mu;
+                let (batch_reconstructed, sigmas) = decoder.decode(&latents);
 
                 let (loss1, loss2) = calc_loss(
-                    &rec,
-                    &real,
+                    &batch_reconstructed,
+                    &batch_real,
                     &sigmas,
                     &mu,
                     &log_var,
@@ -243,10 +242,11 @@ impl TVAE {
                 );
                 let loss = &loss1 + &loss2;
 
+                loss.backward();
+                optimizer.step();
+
                 total_loss += loss.double_value(&[]);
                 loss_count += 1.0;
-
-                optimizer.backward_step(&loss);
 
                 let _ = decoder.sigma.data().clamp_(0.01, 1.0);
             }
