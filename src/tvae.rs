@@ -39,7 +39,7 @@ impl Encoder {
                     *dim,
                     Default::default(),
                 ))
-                .add_fn(Tensor::relu);
+                .add_fn(Tensor::mish);
             curr_dim = *dim;
         }
 
@@ -78,7 +78,7 @@ impl Decoder {
                     *dim,
                     Default::default(),
                 ))
-                .add_fn(Tensor::relu);
+                .add_fn(Tensor::mish);
             curr_dim = *dim;
         }
 
