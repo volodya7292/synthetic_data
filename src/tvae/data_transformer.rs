@@ -200,17 +200,15 @@ impl DataTransformer {
                 let uniques_x_data = uniques_tensor.broadcast_to([n_rows, n_uniques]);
 
                 let hot_vectors = data_x_uniques.transpose(0, 1).eq_tensor(&uniques_x_data);
-                let transformed = hot_vectors.totype(tch::Kind::Int8);
 
-                transformed
+                hot_vectors.totype(tch::Kind::Int8)
             }
             (ColumnDataRef::Continuous(data), ColumnInfo::Continuous { min, max, .. }) => {
                 let range = max - min;
                 let filtered = Tensor::from_slice(data);
                 let normalized = (filtered - *min as f64) / range as f64;
-                let transformed = normalized.reshape([data.len() as i64, 1]);
 
-                transformed
+                normalized.reshape([data.len() as i64, 1])
             }
             _ => panic!("Invalid column data type"),
         }

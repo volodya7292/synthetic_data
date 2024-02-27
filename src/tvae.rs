@@ -96,7 +96,7 @@ impl Decoder {
 
     pub fn decode(&self, input: &Tensor) -> (Tensor, Tensor) {
         let out = self.seq.forward(input);
-        (out, self.sigma.shallow_clone())
+        (out, self.sigma.copy())
     }
 }
 
@@ -109,30 +109,30 @@ fn calc_loss(
     output_info: &[ColumnTrainInfo],
     factor: f32,
 ) -> (Tensor, Tensor) {
-    let mut st = 0_i64;
+    let mut start = 0_i64;
     let mut loss = vec![];
 
     for column_info in output_info {
         for span_info in column_info.output_spans() {
-            let ed = st + span_info.dim;
+            let end = start + span_info.dim;
 
             if span_info.activation != "softmax" {
-                let x_slice = x.slice(1, Some(st), Some(st + 1), 1);
-                let recon_x_slice = recon_x.slice(1, Some(st), Some(st + 1), 1);
+                let x_slice = x.slice(1, start, start + 1, 1);
+                let recon_x_slice = recon_x.slice(1, start, start + 1, 1);
 
-                let std = sigmas.get(st);
+                let std = sigmas.get(start);
                 let eq = x_slice - recon_x_slice.tanh();
 
                 loss.push(
-                    (eq.pow_tensor_scalar(2) / 2 / std.pow_tensor_scalar(2)).sum(tch::Kind::Float),
+                    (eq.pow_tensor_scalar(2.0) / 2.0 / std.pow_tensor_scalar(2.0)).sum(tch::Kind::Float),
                 );
                 loss.push(std.log() * x.size()[0]);
             } else {
-                let x_slice = x.slice(1, Some(st), Some(ed), 1);
-                let recon_x_slice = recon_x.slice(1, Some(st), Some(ed), 1);
+                let x_slice = x.slice(1, start, end, 1);
+                let recon_x_slice = recon_x.slice(1, start, end, 1);
 
                 loss.push(recon_x_slice.cross_entropy_loss::<&_>(
-                    &x_slice.argmax(Some(-1), false),
+                    &x_slice.argmax(-1, false),
                     None,
                     tch::Reduction::Sum,
                     -100,
@@ -140,14 +140,14 @@ fn calc_loss(
                 ));
             }
 
-            st = ed;
+            start = end;
         }
     }
 
-    assert_eq!(st, recon_x.size()[1]);
+    assert_eq!(start, recon_x.size()[1]);
 
     let kld = -0.5_f32
-        * (1_i32 + log_var - mu.pow_tensor_scalar(2) - log_var.exp()).sum(tch::Kind::Float);
+        * (1_f32 + log_var - mu.pow_tensor_scalar(2) - log_var.exp()).sum(tch::Kind::Float);
 
     let s = loss.iter().sum::<Tensor>() * factor as f64 / x.size()[0];
     let kld_norm = &kld / x.size()[0];
@@ -220,8 +220,8 @@ impl TVAE {
 
                 let batch_real = curr_train_data.slice(
                     0,
-                    Some(batch_start),
-                    Some((batch_start + batch_size as i64).min(n_rows)),
+                    batch_start,
+                    (batch_start + batch_size as i64).min(n_rows),
                     1,
                 );
 
@@ -342,10 +342,10 @@ impl TVAE {
 
         for (i, train_info) in self.transformer.train_infos().iter().enumerate() {
             let end_idx = start_idx + train_info.total_dim();
-            let generated_column = generated.slice(0, None, Some(samples as i64), 1).slice(
+            let generated_column = generated.slice(0, None, samples as i64, 1).slice(
                 1,
-                Some(start_idx),
-                Some(end_idx),
+                start_idx,
+                end_idx,
                 1,
             );
 
