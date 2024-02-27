@@ -1,5 +1,6 @@
 use crate::tvae::input::{ColumnData, ColumnDataRef};
 use crate::utils;
+use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 use tch::Tensor;
 
@@ -126,7 +127,7 @@ impl DataTransformer {
                         .max_by(|a, b| a.total_cmp(b))
                         .unwrap_or(f32::NAN);
 
-                    let n_buckets = (data.len() as f64).sqrt().max(1.0) as usize;
+                    let n_buckets = (data.len() as f64).sqrt().clamp(1.0, 256.0) as usize;
                     let pdf = utils::calc_continuous_pdf(min, max, data, n_buckets);
 
                     ColumnInfo::Continuous { min, max, pdf }
@@ -154,10 +155,10 @@ impl DataTransformer {
                         activation: "softmax",
                     }],
                 },
-                ColumnInfo::Continuous { .. } => ColumnTrainInfo {
+                ColumnInfo::Continuous { pdf, .. } => ColumnTrainInfo {
                     output_spans: vec![SpanInfo {
-                        dim: 1,
-                        activation: "tanh",
+                        dim: pdf.len() as i64,
+                        activation: "softmax",
                     }],
                 },
             })
@@ -203,12 +204,25 @@ impl DataTransformer {
 
                 hot_vectors.totype(tch::Kind::Int8)
             }
-            (ColumnDataRef::Continuous(data), ColumnInfo::Continuous { min, max, .. }) => {
+            (ColumnDataRef::Continuous(data), ColumnInfo::Continuous { min, max, pdf, .. }) => {
                 let range = max - min;
-                let filtered = Tensor::from_slice(data);
-                let normalized = (filtered - *min as f64) / range as f64;
+                let normalized = (Tensor::from_slice(data) - *min as f64) / range as f64;
+                let n_buckets = pdf.len() as i64;
 
-                normalized.reshape([data.len() as i64, 1])
+                let data_tensor = (normalized * n_buckets)
+                    .floor()
+                    .clamp(0.0, n_buckets as f64 - 1.0)
+                    .totype(tch::Kind::Int64);
+
+                let uniques_tensor =
+                    Tensor::from_slice(&(0..n_buckets as i32).collect::<Vec<i32>>());
+
+                let data_x_uniques = data_tensor.broadcast_to([n_buckets, n_rows]);
+                let uniques_x_data = uniques_tensor.broadcast_to([n_rows, n_buckets]);
+
+                let hot_vectors = data_x_uniques.transpose(0, 1).eq_tensor(&uniques_x_data);
+
+                hot_vectors.totype(tch::Kind::Int8)
             }
             _ => panic!("Invalid column data type"),
         }
@@ -216,6 +230,7 @@ impl DataTransformer {
 
     pub fn inverse_transform(&self, column_index: usize, data: &Tensor) -> ColumnData {
         let n_rows = data.size()[0];
+        let mut rng = rand::thread_rng();
 
         match &self.column_infos[column_index] {
             ColumnInfo::Discrete {
@@ -231,17 +246,20 @@ impl DataTransformer {
 
                 ColumnData::Discrete(out_data)
             }
-            ColumnInfo::Continuous { min, max, .. } => {
+            ColumnInfo::Continuous { min, max, pdf, .. } => {
                 let mut out_data = Vec::with_capacity(n_rows as usize);
+                let category_indices = data.argmax(Some(1), false);
 
-                let data_norm = data.tanh();
+                let num_buckets = pdf.len();
                 let range = max - min;
-                let clamped = data_norm.clamp(0.0, 1.0);
-                let tensor_inverse = clamped * range as f64 + *min as f64;
+                let bucket_width = range / num_buckets as f32;
 
-                for i in 0..n_rows {
-                    let value = tensor_inverse.double_value(&[i]) as f32;
-                    out_data.push(value)
+                for bucket_idx in category_indices.iter::<i64>().unwrap() {
+                    let bucket_min = min + bucket_width * bucket_idx as f32;
+                    let bucket_max = bucket_min + bucket_width;
+
+                    let inverse = rng.gen_range::<f32, _>(bucket_min..bucket_max);
+                    out_data.push(inverse);
                 }
 
                 ColumnData::Continuous(out_data)

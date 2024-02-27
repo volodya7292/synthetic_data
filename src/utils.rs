@@ -29,7 +29,7 @@ pub(crate) fn calc_continuous_pdf(
     let mut buckets = vec![0_usize; n_buckets];
 
     for v in data {
-        let bucket_idx = (((v - min) / bucket_size) as usize).min(n_buckets - 1);
+        let bucket_idx = ((v - min) / bucket_size).clamp(0.0, n_buckets as f32 - 1.0) as usize;
         buckets[bucket_idx] += 1;
     }
 
