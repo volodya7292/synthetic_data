@@ -234,8 +234,9 @@ impl DataTransformer {
             ColumnInfo::Continuous { min, max, .. } => {
                 let mut out_data = Vec::with_capacity(n_rows as usize);
 
+                let data_norm = data.tanh();
                 let range = max - min;
-                let clamped = data.clamp(0.0, 1.0);
+                let clamped = data_norm.clamp(0.0, 1.0);
                 let tensor_inverse = clamped * range as f64 + *min as f64;
 
                 for i in 0..n_rows {

@@ -124,7 +124,8 @@ fn calc_loss(
                 let eq = x_slice - recon_x_slice.tanh();
 
                 loss.push(
-                    (eq.pow_tensor_scalar(2.0) / 2.0 / std.pow_tensor_scalar(2.0)).sum(tch::Kind::Float),
+                    (0.5_f32 * eq.pow_tensor_scalar(2.0) / std.pow_tensor_scalar(2.0))
+                        .sum(tch::Kind::Float),
                 );
                 loss.push(std.log() * x.size()[0]);
             } else {
@@ -332,7 +333,6 @@ impl TVAE {
             let _ = noise.normal_(0.0, 1.0);
 
             let (fake, _sigmas) = self.decoder.decode(&noise);
-            let fake = fake.tanh();
 
             raw_data.push(fake.detach().to(Device::Cpu));
         }
@@ -342,12 +342,9 @@ impl TVAE {
 
         for (i, train_info) in self.transformer.train_infos().iter().enumerate() {
             let end_idx = start_idx + train_info.total_dim();
-            let generated_column = generated.slice(0, None, samples as i64, 1).slice(
-                1,
-                start_idx,
-                end_idx,
-                1,
-            );
+            let generated_column = generated
+                .slice(0, 0, samples as i64, 1)
+                .slice(1, start_idx, end_idx, 1);
 
             let inverse_data = self.transformer.inverse_transform(i, &generated_column);
             let col_info = &self.transformer.column_infos()[i];

@@ -41,7 +41,6 @@ pub(crate) fn calc_continuous_pdf(
 pub(crate) fn l1_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
     assert_eq!(pdf1.len(), pdf2.len());
 
-    let n_buckets = pdf1.len();
     let count1 = pdf1.iter().sum::<usize>() as f32;
     let count2 = pdf2.iter().sum::<usize>() as f32;
 
@@ -53,7 +52,7 @@ pub(crate) fn l1_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
         .zip(&pdf2_norm)
         .fold(0.0, |accum, (v1, v2)| accum + (v1 - v2).abs());
 
-    diff_sum / n_buckets as f32
+    0.5 * diff_sum
 }
 
 /// Calculates correlation matrix for given columns. Returned data is in row-major order.
