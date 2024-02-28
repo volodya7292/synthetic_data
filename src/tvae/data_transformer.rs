@@ -237,7 +237,7 @@ impl DataTransformer {
                 unique_categories, ..
             } => {
                 let mut out_data = Vec::with_capacity(n_rows as usize);
-                let category_indices = data.argmax(Some(1), false);
+                let category_indices = data.argmax(1, false);
 
                 for idx in category_indices.iter::<i64>().unwrap() {
                     let inverse = unique_categories[idx as usize];
@@ -248,7 +248,7 @@ impl DataTransformer {
             }
             ColumnInfo::Continuous { min, max, pdf, .. } => {
                 let mut out_data = Vec::with_capacity(n_rows as usize);
-                let category_indices = data.argmax(Some(1), false);
+                let category_indices = data.argmax(1, false);
 
                 let num_buckets = pdf.len();
                 let range = max - min;

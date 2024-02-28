@@ -67,7 +67,11 @@ pub(crate) fn calc_correlation_matrix(data: &[ColumnDataRef]) -> Vec<f32> {
 
     let tensor = Tensor::stack(&variables, 0);
     let corr_mat = tensor.corrcoef();
-    let flattened_mat = corr_mat.flatten(0, 1);
+    let flattened_mat = if data.len() > 1 {
+        corr_mat.flatten(0, 1)
+    } else {
+        corr_mat.reshape([1])
+    };
 
     let mut data = vec![0.0_f32; flattened_mat.size1().unwrap() as usize];
     for (out_v, in_v) in data.iter_mut().zip(flattened_mat.iter::<f64>().unwrap()) {
