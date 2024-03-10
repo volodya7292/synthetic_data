@@ -1,15 +1,15 @@
-name: Package
+name: Build
 
 on:
-  release:
-    types: [created]
+  push:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   release:
-    name: Deploy
+    name: Build and upload
     runs-on: ubuntu-latest
     permissions: write-all
     strategy:
@@ -30,4 +30,5 @@ jobs:
           name: Binary
           path: |
             target/release/libsynthetic_data.so
+          retention-days: 30
 
