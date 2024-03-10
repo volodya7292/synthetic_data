@@ -7,14 +7,14 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-tch = { version = "0.15", default-features = false }
+tch = { version = "0.15", default-features = false, features = ["download-libtorch"]}
 rand = "0.8"
 rand_distr = "0.4"
 lazy_static = "1.4"
 index-pool = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-base64 = "0.21"
+base64 = "0.22"
 
 [profile.release]
 rpath = true
