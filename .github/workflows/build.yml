@@ -2,7 +2,7 @@ name: Package
 
 on:
   release:
-    types: [published]
+    types: [created]
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,4 +25,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           RUSTTARGET: ${{ matrix.target }}
-          EXTRA_FILES: "README.md LICENSE"
+          EXTRA_FILES: "README.md LICENSE target/release/libsynthetic_data.so"
