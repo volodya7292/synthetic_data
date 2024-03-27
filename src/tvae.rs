@@ -368,7 +368,7 @@ impl TVAE {
                 .zip(&generated_corr_mat)
                 .map(|(v1, v2)| {
                     if v1.is_finite() && v2.is_finite() {
-                        (v1.abs() - v2.abs()).abs()
+                        ((v1 + 1.0) - (v2 + 1.0)).abs().min(1.0)
                     } else {
                         1.0
                     }

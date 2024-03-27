@@ -247,20 +247,22 @@ impl DataTransformer {
                 ColumnData::Discrete(out_data)
             }
             ColumnInfo::Continuous { min, max, pdf, .. } => {
-                let mut out_data = Vec::with_capacity(n_rows as usize);
-                let category_indices = data.argmax(1, false);
-
                 let num_buckets = pdf.len();
                 let range = max - min;
                 let bucket_width = range / num_buckets as f32;
 
-                for bucket_idx in category_indices.iter::<i64>().unwrap() {
-                    let bucket_min = min + bucket_width * bucket_idx as f32;
-                    let bucket_max = bucket_min + bucket_width;
+                let out_data: Vec<_> = (0..n_rows)
+                    .map(|row_idx| {
+                        let row = data.get(row_idx);
+                        let max_idx = row.argmax(0, false).int64_value(&[]);
 
-                    let inverse = rng.gen_range::<f32, _>(bucket_min..bucket_max);
-                    out_data.push(inverse);
-                }
+                        let bucket_idx = max_idx;
+                        let bucket_min = min + bucket_width * bucket_idx as f32;
+                        let bucket_max = bucket_min + bucket_width;
+
+                        rng.gen_range::<f32, _>(bucket_min..bucket_max)
+                    })
+                    .collect();
 
                 ColumnData::Continuous(out_data)
             }
