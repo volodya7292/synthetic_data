@@ -11,7 +11,7 @@ use tch::{nn, Device, Tensor};
 
 const JSON_DATA_TRANSFORMER_FIELD: &str = "data_transformer";
 const JSON_BATCH_SIZE_FIELD: &str = "batch_size";
-const JSON_NN_DATA_FIELD: &str = "nn_data";
+const JSON_NN_DATA_FIELD: &str = "enc_data";
 
 const LOSS_FACTOR: f32 = 2.0;
 const L2_SCALE: f64 = 1e-5;
@@ -61,7 +61,6 @@ impl Encoder {
 
 struct Decoder {
     seq: nn::Sequential,
-    sigma: Tensor,
 }
 
 impl Decoder {
@@ -89,21 +88,17 @@ impl Decoder {
             Default::default(),
         ));
 
-        let sigma = vs.entry("sigma").or_var(&[data_dim], nn::Init::Const(0.1));
-
-        Self { seq, sigma }
+        Self { seq }
     }
 
-    pub fn decode(&self, input: &Tensor) -> (Tensor, Tensor) {
-        let out = self.seq.forward(input);
-        (out, self.sigma.copy())
+    pub fn decode(&self, input: &Tensor) -> Tensor {
+        self.seq.forward(input)
     }
 }
 
 fn calc_loss(
     recon_x: &Tensor,
     x: &Tensor,
-    sigmas: &Tensor,
     mu: &Tensor,
     log_var: &Tensor,
     output_info: &[ColumnTrainInfo],
@@ -116,30 +111,17 @@ fn calc_loss(
         for span_info in column_info.output_spans() {
             let end = start + span_info.dim;
 
-            if span_info.activation != "softmax" {
-                let x_slice = x.slice(1, start, start + 1, 1);
-                let recon_x_slice = recon_x.slice(1, start, start + 1, 1);
+            let x_slice = x.slice(1, start, end, 1);
+            let recon_x_slice = recon_x.slice(1, start, end, 1);
 
-                let std = sigmas.get(start);
-                let eq = x_slice - recon_x_slice.tanh();
-
-                loss.push(
-                    (0.5_f32 * eq.pow_tensor_scalar(2.0) / std.pow_tensor_scalar(2.0))
-                        .sum(tch::Kind::Float),
-                );
-                loss.push(std.log() * x.size()[0]);
-            } else {
-                let x_slice = x.slice(1, start, end, 1);
-                let recon_x_slice = recon_x.slice(1, start, end, 1);
-
-                loss.push(recon_x_slice.cross_entropy_loss::<&_>(
-                    &x_slice.argmax(-1, false),
-                    None,
-                    tch::Reduction::Sum,
-                    -100,
-                    0.0,
-                ));
-            }
+            let cross_loss = recon_x_slice.cross_entropy_loss::<&_>(
+                &x_slice.argmax(-1, false),
+                None,
+                tch::Reduction::Sum,
+                -100,
+                0.0,
+            );
+            loss.push(cross_loss);
 
             start = end;
         }
@@ -164,11 +146,6 @@ pub struct TVAE {
     transformer: DataTransformer,
 }
 
-fn next_multiple_of(n: usize, multiple: usize) -> usize {
-    assert!(multiple > 0);
-    ((n + multiple - 1) / multiple) * multiple
-}
-
 pub type DoStop = bool;
 pub type Realness = f32;
 pub type CorrelationRealness = f32;
@@ -187,11 +164,20 @@ impl TVAE {
         let transformer = DataTransformer::prepare(data);
         let n_rows = data[0].len() as i64;
 
+        let n_tiles = batch_size.div_ceil(n_rows as usize).max(2);
+        let aligned_n_rows = (n_rows as usize).next_multiple_of(batch_size) as i64;
+
         let train_data = Tensor::cat(
             &data
                 .iter()
                 .enumerate()
-                .map(|(i, v)| transformer.transform(i, v))
+                .map(|(i, v)| {
+                    let transformed = transformer.transform(i, v);
+
+                    transformed
+                        .repeat([n_tiles as i64, 1])
+                        .slice(0, 0, aligned_n_rows, 1)
+                })
                 .collect::<Vec<_>>(),
             1,
         )
@@ -206,36 +192,32 @@ impl TVAE {
         let encoder = Encoder::new(&vs.root(), data_dim, &COMPRESS_DIMS, EMBEDDING_DIM);
         let decoder = Decoder::new(&vs.root(), EMBEDDING_DIM, &DECOMPRESS_DIMS, data_dim);
 
-        let mut optimizer = Adam::default().wd(L2_SCALE).build(&vs, 1e-3).unwrap();
+        let mut optimizer = Adam::default().wd(L2_SCALE).build(&vs, 7e-4).unwrap();
         let mut epoch = 0;
 
         loop {
-            let shuffle_perm = Tensor::randperm(n_rows, (tch::Kind::Int64, tch::Device::Cpu));
+            let shuffle_perm =
+                Tensor::randperm(aligned_n_rows, (tch::Kind::Int64, tch::Device::Cpu));
             let curr_train_data = train_data.index(&[Some(shuffle_perm)]).to(device);
 
             let mut total_loss = 0.0;
             let mut loss_count = 0.0;
 
-            for batch_start in (0..n_rows).step_by(batch_size) {
-                optimizer.zero_grad();
+            for batch_start in (0..aligned_n_rows).step_by(batch_size) {
+                let batch_real =
+                    curr_train_data.slice(0, batch_start, batch_start + batch_size as i64, 1);
 
-                let batch_real = curr_train_data.slice(
-                    0,
-                    batch_start,
-                    (batch_start + batch_size as i64).min(n_rows),
-                    1,
-                );
+                optimizer.zero_grad();
 
                 let (mu, std, log_var) = encoder.encode(&batch_real);
 
                 let random_deviations = std.randn_like();
                 let latents = &random_deviations * &std + &mu;
-                let (batch_reconstructed, sigmas) = decoder.decode(&latents);
+                let batch_reconstructed = decoder.decode(&latents);
 
                 let (loss1, loss2) = calc_loss(
                     &batch_reconstructed,
                     &batch_real,
-                    &sigmas,
                     &mu,
                     &log_var,
                     &transformer.train_infos(),
@@ -248,8 +230,6 @@ impl TVAE {
 
                 total_loss += loss.double_value(&[]);
                 loss_count += 1.0;
-
-                let _ = decoder.sigma.data().clamp_(0.01, 1.0);
             }
 
             let loss = total_loss / loss_count;
@@ -320,31 +300,20 @@ impl TVAE {
     }
 
     pub fn sample(&self, samples: usize) -> (Vec<SampledColumnData>, CorrelationRealness) {
-        let n_steps = next_multiple_of(samples, self.batch_size) / self.batch_size;
         let n_columns = self.transformer.train_infos().len();
         let mut generated_columns = Vec::<SampledColumnData>::with_capacity(n_columns);
-        let mut raw_data = Vec::with_capacity(n_steps * self.batch_size);
 
-        for _ in 0..n_steps {
-            let mut noise = Tensor::zeros(
-                [self.batch_size as i64, EMBEDDING_DIM],
-                (tch::Kind::Float, self.device),
-            );
-            let _ = noise.normal_(0.0, 1.0);
+        let mut noise = Tensor::zeros(
+            [samples as i64, EMBEDDING_DIM],
+            (tch::Kind::Float, self.device),
+        );
+        let _ = noise.normal_(0.0, 1.0);
+        let generated = self.decoder.decode(&noise);
 
-            let (fake, _sigmas) = self.decoder.decode(&noise);
-
-            raw_data.push(fake.detach().to(Device::Cpu));
-        }
-
-        let generated = Tensor::cat(&raw_data, 0);
         let mut start_idx = 0;
-
         for (i, train_info) in self.transformer.train_infos().iter().enumerate() {
             let end_idx = start_idx + train_info.total_dim();
-            let generated_column = generated
-                .slice(0, 0, samples as i64, 1)
-                .slice(1, start_idx, end_idx, 1);
+            let generated_column = generated.slice(1, start_idx, end_idx, 1);
 
             let inverse_data = self.transformer.inverse_transform(i, &generated_column);
             let col_info = &self.transformer.column_infos()[i];
