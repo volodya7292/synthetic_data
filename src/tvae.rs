@@ -3,21 +3,22 @@ pub mod input;
 
 use crate::tvae::data_transformer::{ColumnTrainInfo, DataTransformer};
 use crate::tvae::input::{ColumnDataRef, SampledColumnData};
-use crate::utils;
+use crate::utils::{self, Pdf};
 use base64::Engine;
 use std::io::Cursor;
 use tch::nn::{Adam, Module, OptimizerConfig};
-use tch::{nn, Device, Tensor};
+use tch::{nn, Device, Kind, Tensor};
 
 const JSON_DATA_TRANSFORMER_FIELD: &str = "data_transformer";
 const JSON_BATCH_SIZE_FIELD: &str = "batch_size";
-const JSON_NN_DATA_FIELD: &str = "enc_data";
+const JSON_NN_DATA_FIELD: &str = "nn_data";
 
 const LOSS_FACTOR: f32 = 2.0;
-const L2_SCALE: f64 = 1e-5;
+const L2_SCALE: f64 = 0.0; //1e-5;
 const EMBEDDING_DIM: i64 = 128;
 const COMPRESS_DIMS: [i64; 2] = [128, 128];
 const DECOMPRESS_DIMS: [i64; 2] = [128, 128];
+const NUM_SAMPLE_CYCLES: usize = 4;
 
 struct Encoder {
     seq: nn::Sequential,
@@ -102,7 +103,6 @@ fn calc_loss(
     mu: &Tensor,
     log_var: &Tensor,
     output_info: &[ColumnTrainInfo],
-    factor: f32,
 ) -> (Tensor, Tensor) {
     let mut start = 0_i64;
     let mut loss = vec![];
@@ -132,7 +132,7 @@ fn calc_loss(
     let kld = -0.5_f32
         * (1_f32 + log_var - mu.pow_tensor_scalar(2) - log_var.exp()).sum(tch::Kind::Float);
 
-    let s = loss.iter().sum::<Tensor>() * factor as f64 / x.size()[0];
+    let s = loss.iter().sum::<Tensor>() / x.size()[0];
     let kld_norm = &kld / x.size()[0];
 
     (s, kld_norm)
@@ -215,15 +215,15 @@ impl TVAE {
                 let latents = &random_deviations * &std + &mu;
                 let batch_reconstructed = decoder.decode(&latents);
 
-                let (loss1, loss2) = calc_loss(
+                let (recon_loss, kl_loss) = calc_loss(
                     &batch_reconstructed,
                     &batch_real,
                     &mu,
                     &log_var,
                     &transformer.train_infos(),
-                    LOSS_FACTOR,
                 );
-                let loss = &loss1 + &loss2;
+
+                let loss: Tensor = LOSS_FACTOR * &recon_loss + &kl_loss;
 
                 loss.backward();
                 optimizer.step();
@@ -253,11 +253,11 @@ impl TVAE {
         let transformer_data = self.transformer.save();
         let batch_size = serde_json::Value::Number(self.batch_size.into());
 
-        let mut nn_data = Vec::with_capacity(1024 * 1024);
-        self.vs.save_to_stream(&mut nn_data).unwrap();
+        let mut nn_data_cursor = Cursor::new(Vec::with_capacity(1024 * 1024));
+        self.vs.save_to_stream(&mut nn_data_cursor).unwrap();
 
         let nn_data_base64 = serde_json::Value::String(
-            base64::engine::general_purpose::STANDARD_NO_PAD.encode(nn_data),
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(nn_data_cursor.get_ref()),
         );
 
         let mut map = serde_json::Map::new();
@@ -288,7 +288,10 @@ impl TVAE {
 
         let mut vs = nn::VarStore::new(device);
         let decoder = Decoder::new(&vs.root(), EMBEDDING_DIM, &DECOMPRESS_DIMS, data_dim);
-        vs.load_from_stream(Cursor::new(nn_data)).unwrap();
+        vs.freeze();
+
+        let mut cursor = Cursor::new(nn_data);
+        vs.load_from_stream(&mut cursor).unwrap();
 
         Self {
             vs,
@@ -303,24 +306,112 @@ impl TVAE {
         let n_columns = self.transformer.train_infos().len();
         let mut generated_columns = Vec::<SampledColumnData>::with_capacity(n_columns);
 
-        let mut noise = Tensor::zeros(
-            [samples as i64, EMBEDDING_DIM],
-            (tch::Kind::Float, self.device),
-        );
-        let _ = noise.normal_(0.0, 1.0);
-        let generated = self.decoder.decode(&noise);
+        let latents = Tensor::randn([samples as i64, EMBEDDING_DIM], (Kind::Float, self.device));
+        let generated = self.decoder.decode(&latents);
 
-        let mut start_idx = 0;
-        for (i, train_info) in self.transformer.train_infos().iter().enumerate() {
-            let end_idx = start_idx + train_info.total_dim();
-            let generated_column = generated.slice(1, start_idx, end_idx, 1);
+        let target_pdfs: Vec<Pdf> = self
+            .transformer
+            .column_infos()
+            .iter()
+            .map(|v| v.pdf().clone())
+            .collect();
+        let mut curr_pdfs: Vec<Pdf> = target_pdfs
+            .iter()
+            .map(|v| Pdf::new(vec![0; v.buckets().len()]))
+            .collect();
 
-            let inverse_data = self.transformer.inverse_transform(i, &generated_column);
+        let generated_indexed = self.transformer.inverse_samples_to_indices(&generated);
+
+        for cycle in 0..NUM_SAMPLE_CYCLES {
+            let replacements = self.decoder.decode(&Tensor::randn(
+                [samples as i64, EMBEDDING_DIM],
+                (Kind::Float, self.device),
+            ));
+            let replacements_indexed = self.transformer.inverse_samples_to_indices(&replacements);
+
+            for row_idx in 0..samples {
+                let mut curr_sample = generated_indexed.get(row_idx as i64);
+                let replacement = replacements_indexed.get(row_idx as i64);
+
+                if cycle == 0 {
+                    for (col_idx, curr) in generated_indexed
+                        .get(row_idx as i64)
+                        .iter::<i64>()
+                        .unwrap()
+                        .enumerate()
+                    {
+                        // Fill the initial pdf up
+                        curr_pdfs[col_idx].add(curr as usize, 1);
+                    }
+                    continue;
+                }
+
+                let total_influence = generated_indexed
+                    .get(row_idx as i64)
+                    .iter::<i64>()
+                    .unwrap()
+                    .zip(
+                        replacements_indexed
+                            .get(row_idx as i64)
+                            .iter::<i64>()
+                            .unwrap(),
+                    )
+                    .enumerate()
+                    .map(|(col_idx, (curr, replacement))| {
+                        utils::calc_change_influence(
+                            &target_pdfs[col_idx],
+                            &curr_pdfs[col_idx],
+                            replacement as usize,
+                            curr as usize,
+                        )
+                    })
+                    .sum::<f32>();
+
+                if total_influence >= 0.0 {
+                    for (col_idx, (curr, replacement)) in generated_indexed
+                        .get(row_idx as i64)
+                        .iter::<i64>()
+                        .unwrap()
+                        .zip(
+                            replacements_indexed
+                                .get(row_idx as i64)
+                                .iter::<i64>()
+                                .unwrap(),
+                        )
+                        .enumerate()
+                    {
+                        curr_pdfs[col_idx].add(replacement as usize, 1);
+                        curr_pdfs[col_idx].remove(curr as usize, 1).unwrap();
+                    }
+
+                    curr_sample.copy_(&replacement);
+                }
+            }
+
+            println!(
+                "Cycle {cycle}, {}",
+                curr_pdfs
+                    .iter()
+                    .zip(&target_pdfs)
+                    .map(|(a, b)| a.l1_distance(b))
+                    .sum::<f32>()
+                    / (curr_pdfs.len() as f32)
+            );
+        }
+
+        for (i, _) in self.transformer.train_infos().iter().enumerate() {
+            let generated_column = generated_indexed
+                .slice(1, i as i64, i as i64 + 1, 1)
+                .squeeze();
+
+            let inverse_data = self
+                .transformer
+                .inverse_transform_indexed(i, &generated_column);
             let col_info = &self.transformer.column_infos()[i];
             let realness = 1.0 - col_info.calc_l1_distance(&inverse_data);
+            // println!("out sim{i} {}", 1.0 - realness);
 
             generated_columns.push(SampledColumnData::from_regular(inverse_data, realness));
-            start_idx = end_idx;
         }
 
         let real_corr_mat = self.transformer.correlation_matrix();

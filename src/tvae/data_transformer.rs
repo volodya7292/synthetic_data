@@ -1,5 +1,5 @@
 use crate::tvae::input::{ColumnData, ColumnDataRef};
-use crate::utils;
+use crate::utils::{self, Pdf};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 use tch::Tensor;
@@ -27,12 +27,12 @@ impl ColumnTrainInfo {
 pub enum ColumnInfo {
     Discrete {
         unique_categories: Vec<i32>,
-        pdf: Vec<usize>,
+        pdf: Pdf,
     },
     Continuous {
         min: f32,
         max: f32,
-        pdf: Vec<usize>,
+        pdf: Pdf,
     },
 }
 
@@ -47,7 +47,7 @@ impl ColumnInfo {
                 ColumnData::Discrete(data),
             ) => {
                 let data_pdf = utils::calc_discrete_pdf(unique_categories, data);
-                utils::l1_distance_between_pdfs(&data_pdf, real_pdf)
+                data_pdf.l1_distance(real_pdf)
             }
             (
                 ColumnInfo::Continuous {
@@ -57,11 +57,18 @@ impl ColumnInfo {
                 },
                 ColumnData::Continuous(data),
             ) => {
-                let n_buckets = real_pdf.len();
+                let n_buckets = real_pdf.buckets().len();
                 let data_pdf = utils::calc_continuous_pdf(*min, *max, data, n_buckets);
-                utils::l1_distance_between_pdfs(&data_pdf, real_pdf)
+                data_pdf.l1_distance(real_pdf)
             }
             _ => panic!("Invalid combination"),
+        }
+    }
+
+    pub fn pdf(&self) -> &Pdf {
+        match self {
+            ColumnInfo::Discrete { pdf, .. } => pdf,
+            ColumnInfo::Continuous { pdf, .. } => pdf,
         }
     }
 }
@@ -157,7 +164,7 @@ impl DataTransformer {
                 },
                 ColumnInfo::Continuous { pdf, .. } => ColumnTrainInfo {
                     output_spans: vec![SpanInfo {
-                        dim: pdf.len() as i64,
+                        dim: pdf.buckets().len() as i64,
                         activation: "softmax",
                     }],
                 },
@@ -207,7 +214,7 @@ impl DataTransformer {
             (ColumnDataRef::Continuous(data), ColumnInfo::Continuous { min, max, pdf, .. }) => {
                 let range = max - min;
                 let normalized = (Tensor::from_slice(data) - *min as f64) / range as f64;
-                let n_buckets = pdf.len() as i64;
+                let n_buckets = pdf.buckets().len() as i64;
 
                 let data_tensor = (normalized * n_buckets)
                     .floor()
@@ -247,7 +254,7 @@ impl DataTransformer {
                 ColumnData::Discrete(out_data)
             }
             ColumnInfo::Continuous { min, max, pdf, .. } => {
-                let num_buckets = pdf.len();
+                let num_buckets = pdf.buckets().len();
                 let range = max - min;
                 let bucket_width = range / num_buckets as f32;
 
@@ -266,6 +273,75 @@ impl DataTransformer {
 
                 ColumnData::Continuous(out_data)
             }
+        }
+    }
+
+    pub fn inverse_transform_indexed(&self, column_index: usize, indices: &Tensor) -> ColumnData {
+        let n_rows = indices.size()[0];
+        let mut rng = rand::thread_rng();
+
+        match &self.column_infos[column_index] {
+            ColumnInfo::Discrete {
+                unique_categories, ..
+            } => {
+                let mut out_data = Vec::with_capacity(n_rows as usize);
+                let category_indices = indices;
+
+                for idx in category_indices.iter::<i64>().unwrap() {
+                    let inverse = unique_categories[idx as usize];
+                    out_data.push(inverse);
+                }
+
+                ColumnData::Discrete(out_data)
+            }
+            ColumnInfo::Continuous { min, max, pdf, .. } => {
+                let num_buckets = pdf.buckets().len();
+                let range = max - min;
+                let bucket_width = range / num_buckets as f32;
+
+                let out_data: Vec<_> = (0..n_rows)
+                    .map(|row_idx| {
+                        let max_idx = indices.int64_value(&[row_idx]);
+
+                        let bucket_idx = max_idx;
+                        let bucket_min = min + bucket_width * bucket_idx as f32;
+                        let bucket_max = bucket_min + bucket_width;
+
+                        rng.gen_range::<f32, _>(bucket_min..bucket_max)
+                    })
+                    .collect();
+
+                ColumnData::Continuous(out_data)
+            }
+        }
+    }
+
+    pub fn inverse_samples_to_indices(&self, full_data: &Tensor) -> Tensor {
+        let mut start_idx = 0;
+        let mut cols_out = vec![];
+
+        for train_info in self.train_infos().iter() {
+            let end_idx = start_idx + train_info.total_dim();
+
+            let col_hots = full_data.slice(1, start_idx, end_idx, 1);
+            let col_values = col_hots.argmax(1, false);
+
+            cols_out.push(col_values);
+            start_idx = end_idx;
+        }
+
+        Tensor::stack(&cols_out, 1)
+    }
+
+    pub fn full_hot_to_indices(&self, input: &Tensor, out: &mut [i64]) {
+        let mut start_idx = 0;
+        for (col_idx, train_info) in self.train_infos().iter().enumerate() {
+            let end_idx = start_idx + train_info.total_dim();
+            let generated_hot_value = input.slice(0, start_idx, end_idx, 1);
+            let generated_value = generated_hot_value.argmax(0, false).int64_value(&[]);
+
+            out[col_idx] = generated_value;
+            start_idx = end_idx;
         }
     }
 }

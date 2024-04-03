@@ -1,5 +1,7 @@
 pub mod tvae;
 mod utils;
+#[cfg(test)]
+mod tests;
 
 use crate::tvae::input::{ColumnDataRef, SampledColumnData};
 use crate::tvae::TVAE;
