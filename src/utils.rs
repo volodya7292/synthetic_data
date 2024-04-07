@@ -44,15 +44,6 @@ pub fn calc_change_influence(target: &Pdf, curr: &Pdf, add_idx: usize, remove_id
     let target_count_in_add = target.buckets[add_idx];
     let target_count_in_remove = target.buckets[remove_idx];
 
-    let (biggest_diff_idx, biggest_diff) = target
-        .buckets
-        .iter()
-        .zip(&curr.buckets)
-        .enumerate()
-        .map(|(idx, (tg, curr))| (idx, *tg as isize - *curr as isize))
-        .max_by_key(|(_, d)| d.abs())
-        .unwrap();
-
     let importance = target.l1_distance(curr);
     let add_influence = (target_count_in_add as f32 - curr_count_in_add as f32) / target.cached_sum() as f32;
     let remove_incluence = (curr_count_in_remove as f32 - target_count_in_remove as f32) / target.cached_sum() as f32;
