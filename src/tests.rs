@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::fs;
+use std::{fs, time::Instant};
 
 use crate::tvae::{input::ColumnDataRef, TVAE};
 
@@ -34,15 +34,18 @@ fn train_works() {
     }
     assert!(ages.len() > 10);
 
+    let t0 = Instant::now();
     let net = TVAE::fit(
         &[ColumnDataRef::Discrete(&ages)],
-        32,
+        500,
         tch::Device::Cpu,
         |epoch, loss| {
             println!("epoch {epoch}, loss {loss}");
-            epoch >= 100
+            epoch >= 10
         },
     );
+    let t1 = Instant::now();
+    println!("train time {}s", (t1 - t0).as_secs_f64());
 
     net.sample(5000);
 }
