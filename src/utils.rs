@@ -23,9 +23,16 @@ impl Pdf {
         &self.buckets
     }
 
+    pub fn similarity(&self, other: &Pdf) -> f32 {
+        self.hard_distance(other)
+    }
+
     pub fn l1_distance(&self, other: &Pdf) -> f32 {
-        custom_distance_between_pdfs(&self.buckets, &other.buckets)
-        // l1_distance_between_pdfs(&self.buckets, &other.buckets)
+        l1_distance_between_pdfs(&self.buckets, &other.buckets)
+    }
+
+    pub fn hard_distance(&self, other: &Pdf) -> f32 {
+        hard_distance_between_pdfs(&self.buckets, &other.buckets)
     }
 
     pub fn add(&mut self, bucket_idx: usize, count: usize) {
@@ -124,7 +131,7 @@ pub(crate) fn l1_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
 
 /// The distance is in range [0, 1] where 0 means pdfs are equal and 1 means
 /// maximum difference between pdfs.
-pub(crate) fn custom_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
+pub(crate) fn hard_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
     assert_eq!(pdf1.len(), pdf2.len());
 
     let count1 = pdf1.iter().sum::<usize>() as f32;

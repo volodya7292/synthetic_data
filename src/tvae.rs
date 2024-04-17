@@ -1,4 +1,4 @@
-mod data_transformer;
+pub(crate) mod data_transformer;
 pub mod input;
 
 use crate::tvae::data_transformer::{ColumnTrainInfo, DataTransformer};
@@ -16,9 +16,9 @@ const JSON_NN_DATA_FIELD: &str = "nn_data";
 const LOSS_FACTOR: f32 = 2.0;
 const L2_SCALE: f64 = 0.0; //1e-5;
 const EMBEDDING_DIM: i64 = 128;
-const COMPRESS_DIMS: [i64; 2] = [512, 512];
-const DECOMPRESS_DIMS: [i64; 2] = [512, 512];
-const NUM_SAMPLE_CYCLES: usize = 10;
+const COMPRESS_DIMS: [i64; 2] = [128, 128];
+const DECOMPRESS_DIMS: [i64; 2] = [128, 128];
+const NUM_SAMPLE_CYCLES: usize = 8;
 
 struct Encoder {
     seq: nn::Sequential,
@@ -116,7 +116,7 @@ fn calc_loss(
 
             let cross_loss = recon_x_slice.cross_entropy_loss::<&_>(
                 &x_slice.argmax(-1, false),
-                Some(column_info.balance_weights()),
+                Some(&column_info.balance_weights().to(x_slice.device())),
                 tch::Reduction::Sum,
                 -100,
                 0.0,
@@ -181,7 +181,8 @@ impl TVAE {
                 .collect::<Vec<_>>(),
             1,
         )
-        .totype(tch::Kind::Float);
+        .totype(tch::Kind::Float)
+        .to(device);
 
         let data_dim = transformer
             .train_infos()
@@ -326,9 +327,12 @@ impl TVAE {
                 [samples as i64, EMBEDDING_DIM],
                 (Kind::Float, self.device),
             ));
-            let new_generated_indexed = generated_indexed.copy();
+            let new_generated_indexed = generated_indexed.to(Device::Cpu);
+            let replacements_indexed = self
+                .transformer
+                .inverse_samples_to_indices(&replacements)
+                .to(Device::Cpu);
             let mut new_pdfs = curr_pdfs.clone();
-            let replacements_indexed = self.transformer.inverse_samples_to_indices(&replacements);
 
             for row_idx in 0..samples {
                 let mut curr_sample = new_generated_indexed.get(row_idx as i64);
@@ -389,26 +393,26 @@ impl TVAE {
                 }
             }
 
-            let curr_perf = curr_pdfs
+            let curr_dist = curr_pdfs
                 .iter()
                 .zip(&target_pdfs)
-                .map(|(a, b)| a.l1_distance(b))
+                .map(|(a, b)| a.hard_distance(b))
                 .sum::<f32>()
                 / (curr_pdfs.len() as f32);
 
-            let new_perf = new_pdfs
+            let new_dist = new_pdfs
                 .iter()
                 .zip(&target_pdfs)
-                .map(|(a, b)| a.l1_distance(b))
+                .map(|(a, b)| a.hard_distance(b))
                 .sum::<f32>()
                 / (new_pdfs.len() as f32);
 
-            if cycle == 0 || new_perf > curr_perf {
+            if cycle == 0 || new_dist < curr_dist {
                 curr_pdfs = new_pdfs;
                 generated_indexed = new_generated_indexed;
             }
 
-            println!("Cycle {cycle}, {new_perf}");
+            println!("Cycle {cycle}, {new_dist}");
         }
 
         for (i, _) in self.transformer.train_infos().iter().enumerate() {
@@ -420,7 +424,7 @@ impl TVAE {
                 .transformer
                 .inverse_transform_indexed(i, &generated_column);
             let col_info = &self.transformer.column_infos()[i];
-            let realness = 1.0 - col_info.calc_l1_distance(&inverse_data);
+            let realness = 1.0 - col_info.calc_similarity(&inverse_data);
             // println!("out sim{i} {}", 1.0 - realness);
 
             generated_columns.push(SampledColumnData::from_regular(inverse_data, realness));

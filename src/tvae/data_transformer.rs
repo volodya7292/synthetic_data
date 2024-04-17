@@ -42,7 +42,7 @@ pub enum ColumnInfo {
 }
 
 impl ColumnInfo {
-    pub fn calc_l1_distance(&self, data: &ColumnData) -> f32 {
+    pub fn calc_similarity(&self, data: &ColumnData) -> f32 {
         match (self, data) {
             (
                 ColumnInfo::Discrete {
@@ -52,7 +52,7 @@ impl ColumnInfo {
                 ColumnData::Discrete(data),
             ) => {
                 let data_pdf = utils::calc_discrete_pdf(unique_categories, data);
-                data_pdf.l1_distance(real_pdf)
+                data_pdf.similarity(real_pdf)
             }
             (
                 ColumnInfo::Continuous {
@@ -64,7 +64,7 @@ impl ColumnInfo {
             ) => {
                 let n_buckets = real_pdf.buckets().len();
                 let data_pdf = utils::calc_continuous_pdf(*min, *max, data, n_buckets);
-                data_pdf.l1_distance(real_pdf)
+                data_pdf.similarity(real_pdf)
             }
             _ => panic!("Invalid combination"),
         }
@@ -352,5 +352,44 @@ impl DataTransformer {
             out[col_idx] = generated_value;
             start_idx = end_idx;
         }
+    }
+
+    pub fn avg_univariate_similarity_l1(&self, other: &DataTransformer) -> f32 {
+        let sum = self
+            .column_infos
+            .iter()
+            .zip(other.column_infos.iter())
+            .map(|(a, b)| a.pdf().l1_distance(b.pdf()))
+            .sum::<f32>();
+
+        sum / self.column_infos.len() as f32
+    }
+
+    pub fn avg_univariate_similarity_hard(&self, other: &DataTransformer) -> f32 {
+        let sum = self
+            .column_infos
+            .iter()
+            .zip(other.column_infos.iter())
+            .map(|(a, b)| a.pdf().hard_distance(b.pdf()))
+            .sum::<f32>();
+
+        1.0 - sum / self.column_infos.len() as f32
+    }
+
+    pub fn avg_pearson_similarity(&self, other: &DataTransformer) -> f32 {
+        let sum = self
+            .correlation_matrix
+            .iter()
+            .zip(other.correlation_matrix.iter())
+            .map(|(a, b)| {
+                if a.is_finite() && b.is_finite() {
+                    ((a + 1.0) - (b + 1.0)).abs().min(1.0)
+                } else {
+                    1.0
+                }
+            })
+            .sum::<f32>();
+
+        1.0 - sum / self.correlation_matrix.len() as f32
     }
 }

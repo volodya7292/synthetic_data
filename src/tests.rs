@@ -1,7 +1,6 @@
+use crate::tvae::{data_transformer::DataTransformer, input::ColumnDataRef, TVAE};
 use serde::Deserialize;
-use std::{fs, time::Instant};
-
-use crate::tvae::{input::ColumnDataRef, TVAE};
+use std::{fs, iter, time::Instant};
 
 #[derive(Deserialize)]
 struct FullNet {
@@ -62,4 +61,42 @@ fn sample_works() {
     );
 
     net.sample(5000);
+}
+
+#[test]
+fn trans() {
+    fn load(path: &str) -> DataTransformer {
+        let mut data = csv::Reader::from_path(path).unwrap();
+
+        let mut continuous = vec![vec![]; 29];
+        let mut out_class = vec![];
+
+        for rec in data.records() {
+            let rec = rec.unwrap();
+
+            for (i, v) in rec.iter().enumerate() {
+                if i == 29 {
+                    out_class.push(v.parse::<i32>().unwrap());
+                } else {
+                    continuous[i].push(v.parse::<f32>().unwrap());
+                }
+            }
+        }
+
+        let cols: Vec<_> = continuous
+            .iter()
+            .map(|v| ColumnDataRef::Continuous(v))
+            .chain(iter::once(ColumnDataRef::Discrete(&out_class)))
+            .collect();
+
+        DataTransformer::prepare(&cols)
+    }
+
+    let original = load("testdata/creditcard_reduced.csv");
+    let mostly = load("testdata/creditcard_reduced_mostly.csv");
+
+    let uni_simil = original.avg_univariate_similarity_hard(&mostly);
+    let corr_simil = original.avg_pearson_similarity(&mostly);
+
+    dbg!(uni_simil, corr_simil);
 }
