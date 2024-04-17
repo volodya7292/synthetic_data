@@ -61,18 +61,14 @@ pub fn calc_change_influence(target: &Pdf, curr: &Pdf, add_idx: usize, remove_id
     let target_in_add = target.buckets[add_idx] as f32 / target.cached_sum() as f32;
     let target_in_remove = target.buckets[remove_idx] as f32 / target.cached_sum() as f32;
 
-    // let importance = target.l1_distance(curr);
-
-    // let importance = 1.0 - (curr_count_in_add as f32 / target_count_in_add as f32).max(1.0);
     let mut importance_add =
         1.0 - curr_in_add.min(target_in_add) / curr_in_add.max(target_in_add).max(1e-5);
     let mut importance_remove =
         1.0 - curr_in_remove.min(target_in_remove) / curr_in_remove.max(target_in_remove).max(1e-5);
 
+    // Rebalancing of under/over-represented categories
     importance_add *= 1.0 - target_in_add / target.cached_sum() as f32;
     importance_remove *= 1.0 - target_in_remove / target.cached_sum() as f32;
-
-    // let importance_add = 1.0 - curr_count_in_add as f32 / target_count_in_add as f32;
 
     let add_influence = (target_in_add - curr_in_add).signum();
     let remove_incluence = (curr_in_remove - target_in_remove).signum();

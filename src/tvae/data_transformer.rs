@@ -19,6 +19,7 @@ impl ColumnTrainInfo {
         &self.output_spans
     }
 
+    // Weights for rebalancing of under/over-represented categories
     pub fn balance_weights(&self) -> &Tensor {
         &self.balance_weights
     }

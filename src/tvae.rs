@@ -339,28 +339,17 @@ impl TVAE {
                 let replacement = replacements_indexed.get(row_idx as i64);
 
                 if cycle == 0 {
-                    for (col_idx, curr) in new_generated_indexed
-                        .get(row_idx as i64)
-                        .iter::<i64>()
-                        .unwrap()
-                        .enumerate()
-                    {
+                    for (col_idx, curr) in curr_sample.iter::<i64>().unwrap().enumerate() {
                         // Fill the initial pdf up
                         new_pdfs[col_idx].add(curr as usize, 1);
                     }
                     continue;
                 }
 
-                let total_influence = new_generated_indexed
-                    .get(row_idx as i64)
+                let total_influence = curr_sample
                     .iter::<i64>()
                     .unwrap()
-                    .zip(
-                        replacements_indexed
-                            .get(row_idx as i64)
-                            .iter::<i64>()
-                            .unwrap(),
-                    )
+                    .zip(replacement.iter::<i64>().unwrap())
                     .enumerate()
                     .map(|(col_idx, (curr, replacement))| {
                         utils::calc_change_influence(
@@ -373,16 +362,10 @@ impl TVAE {
                     .sum::<f32>();
 
                 if total_influence >= 0.0 {
-                    for (col_idx, (curr, replacement)) in new_generated_indexed
-                        .get(row_idx as i64)
+                    for (col_idx, (curr, replacement)) in curr_sample
                         .iter::<i64>()
                         .unwrap()
-                        .zip(
-                            replacements_indexed
-                                .get(row_idx as i64)
-                                .iter::<i64>()
-                                .unwrap(),
-                        )
+                        .zip(replacement.iter::<i64>().unwrap())
                         .enumerate()
                     {
                         new_pdfs[col_idx].add(replacement as usize, 1);
