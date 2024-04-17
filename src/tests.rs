@@ -41,7 +41,7 @@ fn train_works() {
         tch::Device::Cpu,
         |epoch, loss| {
             println!("epoch {epoch}, loss {loss}");
-            epoch >= 10
+            epoch >= 100
         },
     );
     let t1 = Instant::now();

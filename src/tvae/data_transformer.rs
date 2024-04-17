@@ -11,11 +11,16 @@ pub struct SpanInfo {
 
 pub struct ColumnTrainInfo {
     output_spans: Vec<SpanInfo>,
+    balance_weights: Tensor,
 }
 
 impl ColumnTrainInfo {
     pub fn output_spans(&self) -> &[SpanInfo] {
         &self.output_spans
+    }
+
+    pub fn balance_weights(&self) -> &Tensor {
+        &self.balance_weights
     }
 
     pub fn total_dim(&self) -> i64 {
@@ -134,7 +139,7 @@ impl DataTransformer {
                         .max_by(|a, b| a.total_cmp(b))
                         .unwrap_or(f32::NAN);
 
-                    let n_buckets = (data.len() as f64).sqrt().clamp(1.0, 256.0) as usize;
+                    let n_buckets = (data.len() as f64).sqrt().clamp(1.0, 100.0) as usize;
                     let pdf = utils::calc_continuous_pdf(min, max, data, n_buckets);
 
                     ColumnInfo::Continuous { min, max, pdf }
@@ -155,18 +160,22 @@ impl DataTransformer {
             .iter()
             .map(|data| match data {
                 ColumnInfo::Discrete {
-                    unique_categories, ..
+                    unique_categories,
+                    pdf,
+                    ..
                 } => ColumnTrainInfo {
                     output_spans: vec![SpanInfo {
                         dim: unique_categories.len() as i64,
                         activation: "softmax",
                     }],
+                    balance_weights: Tensor::from_slice(&pdf.calc_balance_weights()),
                 },
                 ColumnInfo::Continuous { pdf, .. } => ColumnTrainInfo {
                     output_spans: vec![SpanInfo {
                         dim: pdf.buckets().len() as i64,
                         activation: "softmax",
                     }],
+                    balance_weights: Tensor::from_slice(&pdf.calc_balance_weights()),
                 },
             })
             .collect()

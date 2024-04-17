@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tch::Tensor;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Pdf {
     buckets: Vec<usize>,
     sum: usize,
@@ -24,30 +24,53 @@ impl Pdf {
     }
 
     pub fn l1_distance(&self, other: &Pdf) -> f32 {
-        l1_distance_between_pdfs(&self.buckets, &other.buckets)
+        custom_distance_between_pdfs(&self.buckets, &other.buckets)
+        // l1_distance_between_pdfs(&self.buckets, &other.buckets)
     }
 
     pub fn add(&mut self, bucket_idx: usize, count: usize) {
         self.buckets[bucket_idx] += count;
+        self.sum += count;
     }
 
     pub fn remove(&mut self, bucket_idx: usize, count: usize) -> Result<(), ()> {
         self.buckets[bucket_idx] = self.buckets[bucket_idx].checked_sub(count).ok_or(())?;
+        self.sum -= count;
         Ok(())
+    }
+
+    pub fn calc_balance_weights(&self) -> Vec<f32> {
+        self.buckets
+            .iter()
+            .map(|v| 1.0 - *v as f32 / self.sum as f32)
+            .collect()
     }
 }
 
 pub fn calc_change_influence(target: &Pdf, curr: &Pdf, add_idx: usize, remove_idx: usize) -> f32 {
-    let curr_count_in_add = curr.buckets[add_idx];
-    let curr_count_in_remove = curr.buckets[remove_idx];
+    let curr_in_add = curr.buckets[add_idx] as f32 / curr.cached_sum() as f32;
+    let curr_in_remove = curr.buckets[remove_idx] as f32 / curr.cached_sum() as f32;
 
-    let target_count_in_add = target.buckets[add_idx];
-    let target_count_in_remove = target.buckets[remove_idx];
+    let target_in_add = target.buckets[add_idx] as f32 / target.cached_sum() as f32;
+    let target_in_remove = target.buckets[remove_idx] as f32 / target.cached_sum() as f32;
 
-    let importance = target.l1_distance(curr);
-    let add_influence = (target_count_in_add as f32 - curr_count_in_add as f32) / target.cached_sum() as f32;
-    let remove_incluence = (curr_count_in_remove as f32 - target_count_in_remove as f32) / target.cached_sum() as f32;
-    (add_influence + remove_incluence) * importance
+    // let importance = target.l1_distance(curr);
+
+    // let importance = 1.0 - (curr_count_in_add as f32 / target_count_in_add as f32).max(1.0);
+    let mut importance_add =
+        1.0 - curr_in_add.min(target_in_add) / curr_in_add.max(target_in_add).max(1e-5);
+    let mut importance_remove =
+        1.0 - curr_in_remove.min(target_in_remove) / curr_in_remove.max(target_in_remove).max(1e-5);
+
+    importance_add *= 1.0 - target_in_add / target.cached_sum() as f32;
+    importance_remove *= 1.0 - target_in_remove / target.cached_sum() as f32;
+
+    // let importance_add = 1.0 - curr_count_in_add as f32 / target_count_in_add as f32;
+
+    let add_influence = (target_in_add - curr_in_add).signum();
+    let remove_incluence = (curr_in_remove - target_in_remove).signum();
+
+    add_influence * importance_add + remove_incluence * importance_remove
 }
 
 /// Returns map of counts for each unique element.
@@ -97,6 +120,27 @@ pub(crate) fn l1_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
         .fold(0.0, |accum, (v1, v2)| accum + (v1 - v2).abs());
 
     0.5 * diff_sum
+}
+
+/// The distance is in range [0, 1] where 0 means pdfs are equal and 1 means
+/// maximum difference between pdfs.
+pub(crate) fn custom_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
+    assert_eq!(pdf1.len(), pdf2.len());
+
+    let count1 = pdf1.iter().sum::<usize>() as f32;
+    let count2 = pdf2.iter().sum::<usize>() as f32;
+
+    let pdf1_norm: Vec<_> = pdf1.iter().map(|v| *v as f32 / count1).collect();
+    let pdf2_norm: Vec<_> = pdf2.iter().map(|v| *v as f32 / count2).collect();
+
+    let diff_sum = pdf1_norm
+        .iter()
+        .zip(pdf2_norm.iter())
+        .fold(0.0, |accum, (v1, v2)| {
+            accum + (*v1).min(*v2) / (*v1).max(*v2).max(1e-5)
+        });
+
+    1.0 - diff_sum / pdf1.len() as f32
 }
 
 /// Calculates correlation matrix for given columns. Returned data is in row-major order.

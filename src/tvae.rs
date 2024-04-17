@@ -16,9 +16,9 @@ const JSON_NN_DATA_FIELD: &str = "nn_data";
 const LOSS_FACTOR: f32 = 2.0;
 const L2_SCALE: f64 = 0.0; //1e-5;
 const EMBEDDING_DIM: i64 = 128;
-const COMPRESS_DIMS: [i64; 2] = [128, 128];
-const DECOMPRESS_DIMS: [i64; 2] = [128, 128];
-const NUM_SAMPLE_CYCLES: usize = 4;
+const COMPRESS_DIMS: [i64; 2] = [512, 512];
+const DECOMPRESS_DIMS: [i64; 2] = [512, 512];
+const NUM_SAMPLE_CYCLES: usize = 10;
 
 struct Encoder {
     seq: nn::Sequential,
@@ -116,7 +116,7 @@ fn calc_loss(
 
             let cross_loss = recon_x_slice.cross_entropy_loss::<&_>(
                 &x_slice.argmax(-1, false),
-                None,
+                Some(column_info.balance_weights()),
                 tch::Reduction::Sum,
                 -100,
                 0.0,
@@ -308,6 +308,7 @@ impl TVAE {
 
         let latents = Tensor::randn([samples as i64, EMBEDDING_DIM], (Kind::Float, self.device));
         let generated = self.decoder.decode(&latents);
+        let mut generated_indexed = self.transformer.inverse_samples_to_indices(&generated);
 
         let target_pdfs: Vec<Pdf> = self
             .transformer
@@ -320,33 +321,33 @@ impl TVAE {
             .map(|v| Pdf::new(vec![0; v.buckets().len()]))
             .collect();
 
-        let generated_indexed = self.transformer.inverse_samples_to_indices(&generated);
-
         for cycle in 0..NUM_SAMPLE_CYCLES {
             let replacements = self.decoder.decode(&Tensor::randn(
                 [samples as i64, EMBEDDING_DIM],
                 (Kind::Float, self.device),
             ));
+            let new_generated_indexed = generated_indexed.copy();
+            let mut new_pdfs = curr_pdfs.clone();
             let replacements_indexed = self.transformer.inverse_samples_to_indices(&replacements);
 
             for row_idx in 0..samples {
-                let mut curr_sample = generated_indexed.get(row_idx as i64);
+                let mut curr_sample = new_generated_indexed.get(row_idx as i64);
                 let replacement = replacements_indexed.get(row_idx as i64);
 
                 if cycle == 0 {
-                    for (col_idx, curr) in generated_indexed
+                    for (col_idx, curr) in new_generated_indexed
                         .get(row_idx as i64)
                         .iter::<i64>()
                         .unwrap()
                         .enumerate()
                     {
                         // Fill the initial pdf up
-                        curr_pdfs[col_idx].add(curr as usize, 1);
+                        new_pdfs[col_idx].add(curr as usize, 1);
                     }
                     continue;
                 }
 
-                let total_influence = generated_indexed
+                let total_influence = new_generated_indexed
                     .get(row_idx as i64)
                     .iter::<i64>()
                     .unwrap()
@@ -360,7 +361,7 @@ impl TVAE {
                     .map(|(col_idx, (curr, replacement))| {
                         utils::calc_change_influence(
                             &target_pdfs[col_idx],
-                            &curr_pdfs[col_idx],
+                            &new_pdfs[col_idx],
                             replacement as usize,
                             curr as usize,
                         )
@@ -368,7 +369,7 @@ impl TVAE {
                     .sum::<f32>();
 
                 if total_influence >= 0.0 {
-                    for (col_idx, (curr, replacement)) in generated_indexed
+                    for (col_idx, (curr, replacement)) in new_generated_indexed
                         .get(row_idx as i64)
                         .iter::<i64>()
                         .unwrap()
@@ -380,23 +381,34 @@ impl TVAE {
                         )
                         .enumerate()
                     {
-                        curr_pdfs[col_idx].add(replacement as usize, 1);
-                        curr_pdfs[col_idx].remove(curr as usize, 1).unwrap();
+                        new_pdfs[col_idx].add(replacement as usize, 1);
+                        new_pdfs[col_idx].remove(curr as usize, 1).unwrap();
                     }
 
                     curr_sample.copy_(&replacement);
                 }
             }
 
-            println!(
-                "Cycle {cycle}, {}",
-                curr_pdfs
-                    .iter()
-                    .zip(&target_pdfs)
-                    .map(|(a, b)| a.l1_distance(b))
-                    .sum::<f32>()
-                    / (curr_pdfs.len() as f32)
-            );
+            let curr_perf = curr_pdfs
+                .iter()
+                .zip(&target_pdfs)
+                .map(|(a, b)| a.l1_distance(b))
+                .sum::<f32>()
+                / (curr_pdfs.len() as f32);
+
+            let new_perf = new_pdfs
+                .iter()
+                .zip(&target_pdfs)
+                .map(|(a, b)| a.l1_distance(b))
+                .sum::<f32>()
+                / (new_pdfs.len() as f32);
+
+            if cycle == 0 || new_perf > curr_perf {
+                curr_pdfs = new_pdfs;
+                generated_indexed = new_generated_indexed;
+            }
+
+            println!("Cycle {cycle}, {new_perf}");
         }
 
         for (i, _) in self.transformer.train_infos().iter().enumerate() {
