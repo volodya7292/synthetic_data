@@ -103,6 +103,7 @@ fn calc_loss(
     mu: &Tensor,
     log_var: &Tensor,
     output_info: &[ColumnTrainInfo],
+    epoch: usize,
 ) -> (Tensor, Tensor) {
     let mut start = 0_i64;
     let mut loss = vec![];
@@ -114,9 +115,15 @@ fn calc_loss(
             let x_slice = x.slice(1, start, end, 1);
             let recon_x_slice = recon_x.slice(1, start, end, 1);
 
+            let balance_weights = column_info.balance_weights().to(x_slice.device());
+
             let cross_loss = recon_x_slice.cross_entropy_loss::<&_>(
                 &x_slice.argmax(-1, false),
-                Some(&column_info.balance_weights().to(x_slice.device())),
+                if epoch % 2 == 0 {
+                    Some(&balance_weights)
+                } else {
+                    None
+                },
                 tch::Reduction::Sum,
                 -100,
                 0.0,
@@ -208,8 +215,6 @@ impl TVAE {
                 let batch_real =
                     curr_train_data.slice(0, batch_start, batch_start + batch_size as i64, 1);
 
-                optimizer.zero_grad();
-
                 let (mu, std, log_var) = encoder.encode(&batch_real);
 
                 let random_deviations = std.randn_like();
@@ -222,10 +227,12 @@ impl TVAE {
                     &mu,
                     &log_var,
                     &transformer.train_infos(),
+                    epoch,
                 );
 
                 let loss: Tensor = LOSS_FACTOR * &recon_loss + &kl_loss;
 
+                optimizer.zero_grad();
                 loss.backward();
                 optimizer.step();
 

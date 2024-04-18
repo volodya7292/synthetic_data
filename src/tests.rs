@@ -93,10 +93,11 @@ fn trans() {
     }
 
     let original = load("testdata/creditcard_reduced.csv");
-    let mostly = load("testdata/creditcard_reduced_mostly.csv");
+    let synth = load("testdata/credit_ours.csv");
 
-    let uni_simil = original.avg_univariate_similarity_hard(&mostly);
-    let corr_simil = original.avg_pearson_similarity(&mostly);
+    let uni_simil = original.avg_univariate_similarity_hard(&synth);
+    let uni_simil_l1 = original.avg_univariate_similarity_l1(&synth);
+    let corr_simil = original.avg_pearson_similarity(&synth);
 
-    dbg!(uni_simil, corr_simil);
+    dbg!(uni_simil, uni_simil_l1, corr_simil);
 }
