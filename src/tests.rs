@@ -1,4 +1,8 @@
-use crate::tvae::{data_transformer::DataTransformer, input::ColumnDataRef, TVAE};
+use crate::tvae::{
+    data_transformer::DataTransformer,
+    input::{ColumnData, ColumnDataRef},
+    TVAE,
+};
 use serde::Deserialize;
 use std::{fs, iter, time::Instant};
 
@@ -65,13 +69,19 @@ fn sample_works() {
 
 #[test]
 fn trans() {
-    fn load(path: &str) -> DataTransformer {
-        let mut data = csv::Reader::from_path(path).unwrap();
+    fn load(real: &str, model: &str) -> (DataTransformer, Vec<ColumnData>) {
+        let mut real = csv::Reader::from_path(real).unwrap();
+        let mut model = csv::Reader::from_path(model).unwrap();
 
         let mut continuous = vec![vec![]; 29];
         let mut out_class = vec![];
 
-        for rec in data.records() {
+        let mut model_cols: Vec<_> = iter::repeat(ColumnData::Continuous(vec![]))
+            .take(29)
+            .chain(iter::once(ColumnData::Discrete(vec![])))
+            .collect();
+
+        for rec in real.records() {
             let rec = rec.unwrap();
 
             for (i, v) in rec.iter().enumerate() {
@@ -82,6 +92,16 @@ fn trans() {
                 }
             }
         }
+        for rec in model.records() {
+            let rec = rec.unwrap();
+            for (i, v) in rec.iter().enumerate() {
+                let col = &mut model_cols[i];
+                match col {
+                    ColumnData::Discrete(d) => d.push(v.parse::<i32>().unwrap()),
+                    ColumnData::Continuous(d) => d.push(v.parse::<f32>().unwrap()),
+                }
+            }
+        }
 
         let cols: Vec<_> = continuous
             .iter()
@@ -89,15 +109,18 @@ fn trans() {
             .chain(iter::once(ColumnDataRef::Discrete(&out_class)))
             .collect();
 
-        DataTransformer::prepare(&cols)
+        (DataTransformer::prepare(&cols), model_cols)
     }
 
-    let original = load("testdata/creditcard_reduced.csv");
-    let synth = load("testdata/credit_ours.csv");
+    let (original, model) = load(
+        "testdata/creditcard_reduced.csv",
+        "testdata/creditcard_reduced_tonic.csv",
+    );
 
-    let uni_simil = original.avg_univariate_similarity_hard(&synth);
-    let uni_simil_l1 = original.avg_univariate_similarity_l1(&synth);
-    let corr_simil = original.avg_pearson_similarity(&synth);
+    let uni_dist_hard = original.avg_univariate_hard_dist(&model);
+    let uni_dist_l1 = original.avg_univariate_l1_dist(&model);
+    let uni_kl_div = DataTransformer::univariate_kl_div(&original, &model);
+    let corr_dist = original.pearson_dist(&model);
 
-    dbg!(uni_simil, uni_simil_l1, corr_simil);
+    dbg!(uni_dist_hard, uni_dist_l1, uni_kl_div, corr_dist);
 }

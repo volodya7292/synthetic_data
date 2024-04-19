@@ -13,11 +13,11 @@ const JSON_DATA_TRANSFORMER_FIELD: &str = "data_transformer";
 const JSON_BATCH_SIZE_FIELD: &str = "batch_size";
 const JSON_NN_DATA_FIELD: &str = "nn_data";
 
-const LOSS_FACTOR: f32 = 2.0;
+const L_RATE: f64 = 1e-3;
 const L2_SCALE: f64 = 0.0; //1e-5;
 const EMBEDDING_DIM: i64 = 128;
 const COMPRESS_DIMS: [i64; 2] = [128, 128];
-const DECOMPRESS_DIMS: [i64; 2] = [128, 128];
+const DECOMPRESS_DIMS: [i64; 3] = [128, 128, 128];
 const NUM_SAMPLE_CYCLES: usize = 8;
 
 struct Encoder {
@@ -103,43 +103,54 @@ fn calc_loss(
     mu: &Tensor,
     log_var: &Tensor,
     output_info: &[ColumnTrainInfo],
-    epoch: usize,
 ) -> (Tensor, Tensor) {
     let mut start = 0_i64;
     let mut loss = vec![];
 
+    let mut batch_weights = Tensor::zeros(x.size()[0], (Kind::Float, x.device()));
+
     for column_info in output_info {
+        let balance_weights = column_info.balance_weights().to(x.device());
+
         for span_info in column_info.output_spans() {
             let end = start + span_info.dim;
 
             let x_slice = x.slice(1, start, end, 1);
             let recon_x_slice = recon_x.slice(1, start, end, 1);
 
-            let balance_weights = column_info.balance_weights().to(x_slice.device());
+            let x_indices = &x_slice.argmax(-1, false);
+            let curr_weights = balance_weights.index(&[Some(x_indices)]);
+            batch_weights += curr_weights;
 
             let cross_loss = recon_x_slice.cross_entropy_loss::<&_>(
                 &x_slice.argmax(-1, false),
-                if epoch % 2 == 0 {
-                    Some(&balance_weights)
-                } else {
-                    None
-                },
-                tch::Reduction::Sum,
+                // Some(&balance_weights),
+                None,
+                tch::Reduction::None,
                 -100,
                 0.0,
             );
+
             loss.push(cross_loss);
 
             start = end;
         }
     }
 
+    batch_weights =
+        &batch_weights / (batch_weights.sum(None) / output_info.len() as f64 / x.size()[0]);
+
     assert_eq!(start, recon_x.size()[1]);
 
     let kld = -0.5_f32
         * (1_f32 + log_var - mu.pow_tensor_scalar(2) - log_var.exp()).sum(tch::Kind::Float);
 
-    let s = loss.iter().sum::<Tensor>() / x.size()[0];
+    let s = (loss.iter().sum::<Tensor>() * batch_weights).sum(None)
+        / (output_info.len() as f64)
+        / x.size()[0];
+
+    // let s = loss.iter().sum::<Tensor>(); // / x.size()[0];
+
     let kld_norm = &kld / x.size()[0];
 
     (s, kld_norm)
@@ -165,7 +176,7 @@ impl TVAE {
         device: Device,
         flow_control: F,
     ) -> Self {
-        let vs = nn::VarStore::new(device);
+        let mut vs = nn::VarStore::new(device);
         assert!(!data.is_empty());
 
         let transformer = DataTransformer::prepare(data);
@@ -200,8 +211,9 @@ impl TVAE {
         let encoder = Encoder::new(&vs.root(), data_dim, &COMPRESS_DIMS, EMBEDDING_DIM);
         let decoder = Decoder::new(&vs.root(), EMBEDDING_DIM, &DECOMPRESS_DIMS, data_dim);
 
-        let mut optimizer = Adam::default().wd(L2_SCALE).build(&vs, 7e-4).unwrap();
+        let mut optimizer = Adam::default().wd(L2_SCALE).build(&vs, L_RATE).unwrap();
         let mut epoch = 0;
+        let mut kl_factor = 1.0;
 
         loop {
             let shuffle_perm =
@@ -209,6 +221,8 @@ impl TVAE {
             let curr_train_data = train_data.index(&[Some(shuffle_perm)]).to(device);
 
             let mut total_loss = 0.0;
+            let mut total_recon_loss = 0.0;
+            let mut total_kl_loss = 0.0;
             let mut loss_count = 0.0;
 
             for batch_start in (0..aligned_n_rows).step_by(batch_size) {
@@ -227,19 +241,35 @@ impl TVAE {
                     &mu,
                     &log_var,
                     &transformer.train_infos(),
-                    epoch,
                 );
 
-                let loss: Tensor = LOSS_FACTOR * &recon_loss + &kl_loss;
+                let loss: Tensor = &recon_loss + kl_factor * &kl_loss;
 
                 optimizer.zero_grad();
                 loss.backward();
                 optimizer.step();
 
                 total_loss += loss.double_value(&[]);
+                total_recon_loss += recon_loss.double_value(&[]);
+                total_kl_loss += kl_loss.double_value(&[]);
                 loss_count += 1.0;
             }
 
+            let s = total_recon_loss + total_kl_loss;
+            let desired_total_kl_loss = 0.33 * s;
+
+            if total_kl_loss > desired_total_kl_loss {
+                kl_factor *= 1.04;
+            } else {
+                kl_factor /= 1.04;
+            }
+
+            // println!(
+            //     "{} {} {}",
+            //     total_recon_loss / loss_count,
+            //     total_kl_loss / loss_count,
+            //     kl_factor
+            // );
             let loss = total_loss / loss_count;
 
             if flow_control(epoch, loss) {
@@ -247,6 +277,8 @@ impl TVAE {
             }
             epoch += 1;
         }
+
+        vs.freeze();
 
         Self {
             vs,
@@ -322,7 +354,7 @@ impl TVAE {
             .transformer
             .column_infos()
             .iter()
-            .map(|v| v.pdf().clone())
+            .map(|v| v.target_pdf().clone())
             .collect();
         let mut curr_pdfs: Vec<Pdf> = target_pdfs
             .iter()
@@ -334,7 +366,7 @@ impl TVAE {
                 [samples as i64, EMBEDDING_DIM],
                 (Kind::Float, self.device),
             ));
-            let new_generated_indexed = generated_indexed.to(Device::Cpu);
+            let new_generated_indexed = generated_indexed.copy().to(Device::Cpu);
             let replacements_indexed = self
                 .transformer
                 .inverse_samples_to_indices(&replacements)
@@ -434,13 +466,15 @@ impl TVAE {
                 .zip(&generated_corr_mat)
                 .map(|(v1, v2)| {
                     if v1.is_finite() && v2.is_finite() {
-                        ((v1 + 1.0) - (v2 + 1.0)).abs().min(1.0)
+                        ((v1 - v2) / 2.0).abs()
                     } else {
                         1.0
                     }
                 })
                 .sum::<f32>()
                 / real_corr_mat.len() as f32;
+
+        // println!("corr {}", corr_realness);
 
         (generated_columns, corr_realness)
     }

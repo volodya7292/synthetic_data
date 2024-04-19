@@ -23,16 +23,22 @@ impl Pdf {
         &self.buckets
     }
 
-    pub fn similarity(&self, other: &Pdf) -> f32 {
-        self.hard_distance(other)
+    pub fn similarity(&self, other: &Self) -> f32 {
+        // 1.0 - (-Self::kl_div(self, other).abs()).exp()
+        self.l1_distance(other)
     }
 
-    pub fn l1_distance(&self, other: &Pdf) -> f32 {
+    pub fn l1_distance(&self, other: &Self) -> f32 {
         l1_distance_between_pdfs(&self.buckets, &other.buckets)
     }
 
-    pub fn hard_distance(&self, other: &Pdf) -> f32 {
+    pub fn hard_distance(&self, other: &Self) -> f32 {
         hard_distance_between_pdfs(&self.buckets, &other.buckets)
+    }
+
+    /// Ccmputes D_KL (P || Q)
+    pub fn kl_div(p: &Self, q: &Self) -> f32 {
+        lk_div_between_pdfs(&p.buckets, &q.buckets)
     }
 
     pub fn add(&mut self, bucket_idx: usize, count: usize) {
@@ -55,25 +61,23 @@ impl Pdf {
 }
 
 pub fn calc_change_influence(target: &Pdf, curr: &Pdf, add_idx: usize, remove_idx: usize) -> f32 {
+    assert!(curr.buckets[remove_idx] > 0);
+
     let curr_in_add = curr.buckets[add_idx] as f32 / curr.cached_sum() as f32;
     let curr_in_remove = curr.buckets[remove_idx] as f32 / curr.cached_sum() as f32;
 
     let target_in_add = target.buckets[add_idx] as f32 / target.cached_sum() as f32;
     let target_in_remove = target.buckets[remove_idx] as f32 / target.cached_sum() as f32;
 
-    let mut importance_add =
-        1.0 - curr_in_add.min(target_in_add) / curr_in_add.max(target_in_add).max(1e-5);
-    let mut importance_remove =
-        1.0 - curr_in_remove.min(target_in_remove) / curr_in_remove.max(target_in_remove).max(1e-5);
+    // KL-divergences
+    let influence_add = target_in_add * (target_in_add.max(1e-5) / curr_in_add.max(1e-5)).ln();
+    let influence_remove = target_in_remove * (curr_in_remove.max(1e-5) / target_in_remove.max(1e-5)).ln();
 
     // Rebalancing of under/over-represented categories
-    importance_add *= 1.0 - target_in_add / target.cached_sum() as f32;
-    importance_remove *= 1.0 - target_in_remove / target.cached_sum() as f32;
+    // influence_add *= 1.0 - target_in_add / target.cached_sum() as f32;
+    // influence_remove *= 1.0 - target_in_remove / target.cached_sum() as f32;
 
-    let add_influence = (target_in_add - curr_in_add).signum();
-    let remove_incluence = (curr_in_remove - target_in_remove).signum();
-
-    add_influence * importance_add + remove_incluence * importance_remove
+    influence_add + influence_remove
 }
 
 /// Returns map of counts for each unique element.
@@ -120,7 +124,8 @@ pub(crate) fn l1_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 {
     let diff_sum = pdf1_norm
         .iter()
         .zip(&pdf2_norm)
-        .fold(0.0, |accum, (v1, v2)| accum + (v1 - v2).abs());
+        .map(|(v1, v2)| (v1 - v2).abs())
+        .sum::<f32>();
 
     0.5 * diff_sum
 }
@@ -139,9 +144,8 @@ pub(crate) fn hard_distance_between_pdfs(pdf1: &[usize], pdf2: &[usize]) -> f32 
     let diff_sum = pdf1_norm
         .iter()
         .zip(pdf2_norm.iter())
-        .fold(0.0, |accum, (v1, v2)| {
-            accum + (*v1).min(*v2) / (*v1).max(*v2).max(1e-5)
-        });
+        .map(|(v1, v2)| (*v1).min(*v2).max(1e-5) / (*v1).max(*v2).max(1e-5))
+        .sum::<f32>();
 
     1.0 - diff_sum / pdf1.len() as f32
 }
@@ -169,4 +173,22 @@ pub(crate) fn calc_correlation_matrix(data: &[ColumnDataRef]) -> Vec<f32> {
         *out_v = in_v as f32;
     }
     data
+}
+
+/// Ccmputes D_KL (P || Q)
+pub(crate) fn lk_div_between_pdfs(p: &[usize], q: &[usize]) -> f32 {
+    assert_eq!(p.len(), q.len());
+
+    let count1 = p.iter().sum::<usize>() as f32;
+    let count2 = q.iter().sum::<usize>() as f32;
+
+    let pdf1_norm: Vec<_> = p.iter().map(|v| *v as f32 / count1).collect();
+    let pdf2_norm: Vec<_> = q.iter().map(|v| *v as f32 / count2).collect();
+
+    let s = pdf1_norm
+        .iter()
+        .zip(pdf2_norm.iter())
+        .map(|(p, q)| p * (p.max(1e-6) / q.max(1e-6)).ln())
+        .sum::<f32>();
+    s
 }

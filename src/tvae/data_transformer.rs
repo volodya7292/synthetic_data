@@ -43,18 +43,14 @@ pub enum ColumnInfo {
 }
 
 impl ColumnInfo {
-    pub fn calc_similarity(&self, data: &ColumnData) -> f32 {
+    pub fn calc_data_pdf(&self, data: &ColumnData) -> Pdf {
         match (self, data) {
             (
                 ColumnInfo::Discrete {
-                    unique_categories,
-                    pdf: real_pdf,
+                    unique_categories, ..
                 },
                 ColumnData::Discrete(data),
-            ) => {
-                let data_pdf = utils::calc_discrete_pdf(unique_categories, data);
-                data_pdf.similarity(real_pdf)
-            }
+            ) => utils::calc_discrete_pdf(unique_categories, data),
             (
                 ColumnInfo::Continuous {
                     min,
@@ -64,14 +60,37 @@ impl ColumnInfo {
                 ColumnData::Continuous(data),
             ) => {
                 let n_buckets = real_pdf.buckets().len();
-                let data_pdf = utils::calc_continuous_pdf(*min, *max, data, n_buckets);
-                data_pdf.similarity(real_pdf)
+                utils::calc_continuous_pdf(*min, *max, data, n_buckets)
             }
             _ => panic!("Invalid combination"),
         }
     }
 
-    pub fn pdf(&self) -> &Pdf {
+    pub fn calc_similarity(&self, data: &ColumnData) -> f32 {
+        let data_pdf = self.calc_data_pdf(data);
+        let target_pdf = self.target_pdf();
+        data_pdf.similarity(target_pdf)
+    }
+
+    pub fn calc_hard_distance(&self, data: &ColumnData) -> f32 {
+        let data_pdf = self.calc_data_pdf(data);
+        let target_pdf = self.target_pdf();
+        data_pdf.hard_distance(target_pdf)
+    }
+
+    pub fn calc_l1_distance(&self, data: &ColumnData) -> f32 {
+        let data_pdf = self.calc_data_pdf(data);
+        let target_pdf = self.target_pdf();
+        data_pdf.l1_distance(target_pdf)
+    }
+
+    pub fn calc_kl(&self, data: &ColumnData) -> f32 {
+        let data_pdf = self.calc_data_pdf(data);
+        let target_pdf = self.target_pdf();
+        Pdf::kl_div(target_pdf, &data_pdf)
+    }
+
+    pub fn target_pdf(&self) -> &Pdf {
         match self {
             ColumnInfo::Discrete { pdf, .. } => pdf,
             ColumnInfo::Continuous { pdf, .. } => pdf,
@@ -355,42 +374,55 @@ impl DataTransformer {
         }
     }
 
-    pub fn avg_univariate_similarity_l1(&self, other: &DataTransformer) -> f32 {
-        let sum = self
-            .column_infos
+    pub fn avg_univariate_l1_dist(&self, columns: &[ColumnData]) -> f32 {
+        let n = self.column_infos().len() as f32;
+        self.column_infos()
             .iter()
-            .zip(other.column_infos.iter())
-            .map(|(a, b)| a.pdf().l1_distance(b.pdf()))
-            .sum::<f32>();
-
-        sum / self.column_infos.len() as f32
+            .zip(columns.iter())
+            .map(|(a, b)| a.calc_l1_distance(b))
+            .sum::<f32>()
+            / n
     }
 
-    pub fn avg_univariate_similarity_hard(&self, other: &DataTransformer) -> f32 {
-        let sum = self
-            .column_infos
+    pub fn avg_univariate_hard_dist(&self, columns: &[ColumnData]) -> f32 {
+        let n = self.column_infos().len() as f32;
+        self.column_infos()
             .iter()
-            .zip(other.column_infos.iter())
-            .map(|(a, b)| a.pdf().hard_distance(b.pdf()))
-            .sum::<f32>();
-
-        1.0 - sum / self.column_infos.len() as f32
+            .zip(columns.iter())
+            .map(|(a, b)| a.calc_hard_distance(b))
+            .sum::<f32>()
+            / n
     }
 
-    pub fn avg_pearson_similarity(&self, other: &DataTransformer) -> f32 {
+    /// Ccmputes D_KL (P || Q)
+    pub fn univariate_kl_div(p: &Self, q: &[ColumnData]) -> f32 {
+        p.column_infos()
+            .iter()
+            .zip(q.iter())
+            .map(|(a, b)| a.calc_kl(b))
+            .sum::<f32>()
+    }
+
+    pub fn pearson_dist(&self, columns: &[ColumnData]) -> f32 {
+        let other_matrix =
+            utils::calc_correlation_matrix(&columns.iter().map(|v| v.as_ref()).collect::<Vec<_>>());
+
+        let v = 90;
+        dbg!(other_matrix[v], self.correlation_matrix[v]);
+
         let sum = self
             .correlation_matrix
             .iter()
-            .zip(other.correlation_matrix.iter())
+            .zip(other_matrix.iter())
             .map(|(a, b)| {
                 if a.is_finite() && b.is_finite() {
-                    ((a + 1.0) - (b + 1.0)).abs().min(1.0)
+                    ((a - b) / 2.0).abs()
                 } else {
                     1.0
                 }
             })
             .sum::<f32>();
 
-        1.0 - sum / self.correlation_matrix.len() as f32
+        sum
     }
 }

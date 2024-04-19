@@ -12,7 +12,7 @@ impl ColumnDataRef<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ColumnData {
     Discrete(Vec<i32>),
     Continuous(Vec<f32>),
@@ -23,6 +23,13 @@ impl ColumnData {
         match self {
             Self::Discrete(_) => 4,
             Self::Continuous(_) => 4,
+        }
+    }
+
+    pub fn as_ref(&self) -> ColumnDataRef {
+        match self {
+            ColumnData::Discrete(v) => ColumnDataRef::Discrete(v),
+            ColumnData::Continuous(v) => ColumnDataRef::Continuous(v),
         }
     }
 }
