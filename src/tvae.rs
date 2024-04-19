@@ -256,7 +256,7 @@ impl TVAE {
             }
 
             let s = total_recon_loss + total_kl_loss;
-            let desired_total_kl_loss = 0.33 * s;
+            let desired_total_kl_loss = 1.0 / 3.0 * s;
 
             if total_kl_loss > desired_total_kl_loss {
                 kl_factor *= 1.04;
