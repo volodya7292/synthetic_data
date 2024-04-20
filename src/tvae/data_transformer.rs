@@ -389,7 +389,8 @@ impl DataTransformer {
         self.column_infos()
             .iter()
             .zip(columns.iter())
-            .map(|(a, b)| a.calc_hard_distance(b))
+            .enumerate()
+            .map(|(i, (a, b))| a.calc_hard_distance(b))
             .sum::<f32>()
             / n
     }
@@ -406,9 +407,6 @@ impl DataTransformer {
     pub fn pearson_dist(&self, columns: &[ColumnData]) -> f32 {
         let other_matrix =
             utils::calc_correlation_matrix(&columns.iter().map(|v| v.as_ref()).collect::<Vec<_>>());
-
-        let v = 90;
-        dbg!(other_matrix[v], self.correlation_matrix[v]);
 
         let sum = self
             .correlation_matrix

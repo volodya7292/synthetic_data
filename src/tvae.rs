@@ -1,5 +1,6 @@
 pub(crate) mod data_transformer;
 pub mod input;
+pub mod classifier;
 
 use crate::tvae::data_transformer::{ColumnTrainInfo, DataTransformer};
 use crate::tvae::input::{ColumnDataRef, SampledColumnData};
