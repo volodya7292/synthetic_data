@@ -1,8 +1,6 @@
 # synthetic_data
 
-A dynamic system library for synthetic data generation using
-slightly simplified [TVAE](https://arxiv.org/abs/1907.00503)
-architecture (for continuous data uses min-max normalization instead of mode-specific).
+Implements synthetic data generation using PSVAE.
 
 ## Building
 
