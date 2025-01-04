@@ -1,6 +1,6 @@
 # synthetic_data
 
-Implements synthetic data generation using PSVAE.
+Implements synthetic data generation using PSVAE model from https://arxiv.org/abs/2407.13016.
 
 ## Building
 
@@ -21,3 +21,16 @@ Set `LIBTORCH=<pytorch folder>` environment variable.
 
 Run `cargo build --release`. The library is generated in `/target/release/` directory.
  
+### Citation
+
+```bibtex
+@misc{highquality_tabular_datagen_2024,
+      title={High-Quality Tabular Data Generation using Post-Selected VAE}, 
+      author={Volodymyr Shulakov},
+      year={2024},
+      eprint={2407.13016},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2407.13016}, 
+}
+```
