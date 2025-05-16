@@ -59,7 +59,7 @@ impl ColumnInfo {
                 },
                 ColumnData::Continuous(data),
             ) => {
-                let n_buckets = real_pdf.buckets().len();
+                let n_buckets = real_pdf.num_finite_buckets();
                 utils::calc_continuous_pdf(*min, *max, data, n_buckets)
             }
             _ => panic!("Invalid combination"),
@@ -160,7 +160,7 @@ impl DataTransformer {
                         .unwrap_or(f32::NAN);
 
                     let n_buckets = (filtered.len() as f64).sqrt().clamp(1.0, 100.0) as usize;
-                    let pdf = utils::calc_continuous_pdf(min, max, &filtered, n_buckets);
+                    let pdf = utils::calc_continuous_pdf(min, max, data, n_buckets);
 
                     ColumnInfo::Continuous { min, max, pdf }
                 }
@@ -242,13 +242,22 @@ impl DataTransformer {
             }
             (ColumnDataRef::Continuous(data), ColumnInfo::Continuous { min, max, pdf, .. }) => {
                 let range = max - min;
-                let normalized = (Tensor::from_slice(data) - *min as f64) / range as f64;
+
+                // create a tensor that maps NaN values to the last bucket
+                let mut normalized = (Tensor::from_slice(data) - *min as f64) / range as f64;
                 let n_buckets = pdf.buckets().len() as i64;
 
-                let data_tensor = (normalized * n_buckets)
+                // replace NaN values with 1.0 (which will map to the last bucket)
+                let nan_mask = normalized.isnan();
+                normalized = normalized.masked_fill(&nan_mask, 1.0);
+
+                let data_tensor = (normalized * (n_buckets - 1) as f64)
                     .floor()
-                    .clamp(0.0, n_buckets as f64 - 1.0)
+                    .clamp(0.0, (n_buckets - 1) as f64)
                     .totype(tch::Kind::Int64);
+
+                // force NaN values to the last bucket
+                let data_tensor = data_tensor.masked_fill(&nan_mask, n_buckets - 1);
 
                 let uniques_tensor =
                     Tensor::from_slice(&(0..n_buckets as i32).collect::<Vec<i32>>());
@@ -283,7 +292,7 @@ impl DataTransformer {
                 ColumnData::Discrete(out_data)
             }
             ColumnInfo::Continuous { min, max, pdf, .. } => {
-                let num_buckets = pdf.buckets().len();
+                let num_buckets = pdf.num_finite_buckets();
                 let range = max - min;
                 let bucket_width = range / num_buckets as f32;
 
@@ -293,6 +302,10 @@ impl DataTransformer {
                         let max_idx = row.argmax(0, false).int64_value(&[]);
 
                         let bucket_idx = max_idx;
+                        if bucket_idx == pdf.buckets().len() as i64 - 1 {
+                            return f32::NAN;
+                        }
+
                         let bucket_min = min + bucket_width * bucket_idx as f32;
                         let bucket_max = bucket_min + bucket_width;
 
@@ -324,7 +337,7 @@ impl DataTransformer {
                 ColumnData::Discrete(out_data)
             }
             ColumnInfo::Continuous { min, max, pdf, .. } => {
-                let num_buckets = pdf.buckets().len();
+                let num_buckets = pdf.num_finite_buckets();
                 let range = max - min;
                 let bucket_width = range / num_buckets as f32;
 
@@ -333,10 +346,26 @@ impl DataTransformer {
                         let max_idx = indices.int64_value(&[row_idx]);
 
                         let bucket_idx = max_idx;
+                        if bucket_idx == pdf.buckets().len() as i64 - 1 {
+                            return f32::NAN;
+                        }
+
                         let bucket_min = min + bucket_width * bucket_idx as f32;
                         let bucket_max = bucket_min + bucket_width;
 
-                        rng.gen_range::<f32, _>(bucket_min..bucket_max)
+                        if (bucket_min..=bucket_max).is_empty() {
+                            dbg!(
+                                bucket_min..=bucket_max,
+                                min,
+                                max,
+                                max - min,
+                                pdf,
+                                num_buckets,
+                                range
+                            );
+                        }
+
+                        rng.gen_range::<f32, _>(bucket_min..=bucket_max)
                     })
                     .collect();
 

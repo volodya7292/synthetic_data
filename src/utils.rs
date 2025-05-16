@@ -23,6 +23,10 @@ impl Pdf {
         &self.buckets
     }
 
+    pub fn num_finite_buckets(&self) -> usize {
+        self.buckets.len() - 1
+    }
+
     pub fn similarity(&self, other: &Self) -> f32 {
         // 1.0 - (-Self::kl_div(self, other).abs()).exp()
         self.l1_distance(other)
@@ -98,13 +102,19 @@ pub(crate) fn calc_discrete_pdf(uniques: &[i32], data: &[i32]) -> Pdf {
 }
 
 /// Returns map of counts for each unique element.
+/// The resulting `Pdf` contains one extra bucket for `NaN` values.
 pub(crate) fn calc_continuous_pdf(min: f32, max: f32, data: &[f32], n_buckets: usize) -> Pdf {
-    let bucket_size = (max - min) / n_buckets as f32;
-    let mut buckets = vec![0_usize; n_buckets];
+    let mut buckets = vec![0_usize; n_buckets + 1];
+    let bucket_size = (max - min) / (n_buckets - 1) as f32;
 
     for v in data {
-        let bucket_idx = ((v - min) / bucket_size).clamp(0.0, n_buckets as f32 - 1.0) as usize;
-        buckets[bucket_idx] += 1;
+        if v.is_nan() {
+            // put NaN values in the last bucket
+            buckets[n_buckets] += 1;
+        } else {
+            let bucket_idx = ((v - min) / bucket_size).clamp(0.0, (n_buckets - 1) as f32) as usize;
+            buckets[bucket_idx] += 1;
+        }
     }
 
     Pdf::new(buckets)
