@@ -146,7 +146,9 @@ impl DataTransformer {
                     }
                 }
                 ColumnDataRef::Continuous(data) => {
-                    let filtered: Vec<_> = data.iter().cloned().filter(|v| v.is_finite()).collect();
+                    let mut filtered: Vec<_> = data.iter().cloned().filter(|v| v.is_finite()).collect();
+                    filtered.sort_by(|a, b| a.total_cmp(b));
+                    filtered.dedup();
 
                     let min = filtered
                         .iter()
@@ -158,7 +160,7 @@ impl DataTransformer {
                         .cloned()
                         .max_by(|a, b| a.total_cmp(b))
                         .unwrap_or(f32::NAN);
-
+                    
                     let n_buckets = (filtered.len() as f64).sqrt().clamp(1.0, 100.0) as usize;
                     let pdf = utils::calc_continuous_pdf(min, max, data, n_buckets);
 
