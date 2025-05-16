@@ -159,8 +159,8 @@ impl DataTransformer {
                         .max_by(|a, b| a.total_cmp(b))
                         .unwrap_or(f32::NAN);
 
-                    let n_buckets = (data.len() as f64).sqrt().clamp(1.0, 100.0) as usize;
-                    let pdf = utils::calc_continuous_pdf(min, max, data, n_buckets);
+                    let n_buckets = (filtered.len() as f64).sqrt().clamp(1.0, 100.0) as usize;
+                    let pdf = utils::calc_continuous_pdf(min, max, &filtered, n_buckets);
 
                     ColumnInfo::Continuous { min, max, pdf }
                 }
